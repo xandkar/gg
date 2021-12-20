@@ -20,7 +20,7 @@
 
 (define-struct/contract Repo
   ([root string?]
-   [locals locals?]
+   [locals locals?] ; TODO locals should be a custom set keyed on hostname+path
    [remotes remotes?])
   #:transparent)
 
@@ -126,6 +126,13 @@
   (define all-roots (mutable-set))
   (define all-locals (mutable-set))
   (define all-remotes (mutable-set))
+  (define (local-id l) (format "~a:~a" (Local-hostname l) (Local-path l)))
+  (define (local-label l)
+    (define description (Local-description l))
+    (define path (Local-path l))
+    (if description
+        (format "~a~n~a" path description)
+        (format "~a"     path)))
   (displayln "digraph {")
   (for-each
     (λ (r)
@@ -139,7 +146,7 @@
                (printf
                  "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
                  root
-                 (Local-path l)
+                 (local-id l)
                  (Local-hostname l)))
             locals)
           (for-each
@@ -163,16 +170,10 @@
   (set-for-each
     all-locals
     (λ (l)
-       (define description (Local-description l))
-       (define path (Local-path l))
-       (define label
-         (if description
-             (format "~a~n~a" path description)
-             (format "~a"     path)))
        (printf
          "~v [label=~v shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8];~n"
-         path
-         label)))
+         (local-id l)
+         (local-label l))))
   (set-for-each
     all-remotes
     (λ (r)
