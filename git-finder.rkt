@@ -23,8 +23,11 @@
     (process cmd))
   (define lines (port->lines stdout))
   (ctrl 'wait)
-  ; TODO Print stderr if not 'done-ok
-  (invariant-assertion 'done-ok (ctrl 'status))
+  (match (ctrl 'status)
+    ['done-ok (void)]
+    ['done-error
+     (copy-port stderr (current-error-port))
+     (exit 1)])
   (close-output-port stdin)
   (close-input-port stdout)
   (close-input-port stderr)
