@@ -2,16 +2,23 @@
 
 (require racket/os)
 
-(define local? path-string?)
-(define locals? (listof local?))
-(define remote? string?)
-(define remotes? (listof remote?))
+(define-struct/contract Local
+  ([hostname string?]
+   [path path-string?]
+   [description (or/c #f string?)])
+  #:transparent)
+
+(define locals? (listof Local?))
+
+(define-struct/contract Remote
+  ([hostname string?]
+   [address string?])
+  #:transparent)
+
+(define remotes? (listof Remote?))
 
 (define-struct/contract Repo
-  ([hostname string?]
-   [root string?]
-   ;[description (or/c #f string?)] ; TODO Grab from .git/description
-   ; TODO Each local can have diff description. Combine them?
+  ([root string?]
    [locals locals?]
    [remotes remotes?])
   #:transparent)
@@ -34,7 +41,7 @@
   lines)
 
 (define/contract (git-dir->remotes git-dir-path)
-  (-> path-string? locals?)
+  (-> path-string? (listof string?))
   (exe
     (string-append
       "git --git-dir=" git-dir-path " remote -v | awk '{print $2}' | sort -u")))
@@ -50,7 +57,7 @@
     [_ (assert-unreachable)]))
 
 (define/contract (find-git-dirs search-paths)
-  (-> (listof path-string?) (listof local?))
+  (-> (listof path-string?) (listof path-string?))
   (define (find search-path)
     (exe (string-append "find " search-path " -type d -name .git")))
   (append* (map find search-paths)))
@@ -64,39 +71,41 @@
   (define (locals repos) (map second repos))
   (define (remotes repos) (uniq (append* (map third repos))))
   (map (λ (repos-with-shared-root-commit)
-          (Repo hostname
-                (root repos-with-shared-root-commit)
-                (locals repos-with-shared-root-commit)
-                (remotes repos-with-shared-root-commit)))
-       (group-by first (foldl (λ (dir repos)
-                                 ; TODO git lookups can be done concurrently
-                                 (define root (git-dir->root-digest dir))
-                                 (define remotes (git-dir->remotes dir))
-                                 (define repo (list root dir remotes))
-                                 (if root
-                                     (cons repo repos)
-                                     repos))
-                              '()
-                              (filter
-                                (λ (path)
-                                   (and (not (ormap (curry string-prefix? path)
-                                                    exclude-prefix))
-                                        (not (ormap (λ (px) (regexp-match? px path))
-                                                    exclude-regexp))))
-                                (find-git-dirs search-paths))))))
+          (Repo (root repos-with-shared-root-commit)
+                ; TODO fetch description
+                (map (λ (path) (Local hostname path #f))
+                     (locals repos-with-shared-root-commit))
+                (map (λ (addr) (Remote hostname addr))
+                     (remotes repos-with-shared-root-commit))))
+       (group-by first
+                 (foldl (λ (dir repos)
+                           ; TODO git lookups can be done concurrently
+                           (match (git-dir->root-digest dir)
+                             [#f repos]
+                             [root
+                               (define remotes (git-dir->remotes dir))
+                               (define repo (list root dir remotes))
+                               (cons repo repos)]))
+                        '()
+                        (filter
+                          (λ (path)
+                             (and (not (ormap (curry string-prefix? path)
+                                              exclude-prefix))
+                                  (not (ormap (λ (px) (regexp-match? px path))
+                                              exclude-regexp))))
+                          (find-git-dirs search-paths))))))
 
 (define/contract (print-table repos)
   (-> (listof Repo?) void?)
-  (define (output root hostname tag locations)
+  (define (output root tag get-host get-addr locations)
     (for-each
-      (λ (location)
-         (displayln (string-join (list root hostname tag location) " ")))
+      (λ (l) (displayln (string-join (list root (get-host l) tag (get-addr l)) " ")))
       locations))
   (for-each
     (λ (repo)
-       (match-define (Repo hostname root locals remotes) repo)
-       (output root hostname "local" locals)
-       (output root hostname "remote" remotes)
+       (match-define (Repo root locals remotes) repo)
+       (output root "local"  Local-hostname  Local-path     locals)
+       (output root "remote" Remote-hostname Remote-address remotes)
        (newline) ; So that same-root locations are visually grouped.
        )
     repos))
@@ -111,26 +120,26 @@
     (λ (r)
        ; TODO Color and shape codes for: root, local and remote.
        (match r
-         [(Repo hostname root (and locals (list* _ _ _)) remotes)
+         [(Repo root (and locals (list* _ _ _)) remotes)
           (for-each
             (λ (l)
                (set-add! all-roots root)
-               (set-add! all-locals l)
+               (set-add! all-locals (Local-path l))
                (printf
                  "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
                  root
-                 l
-                 hostname))
+                 (Local-path l)
+                 (Local-hostname l)))
             locals)
           (for-each
             (λ (r)
                (set-add! all-roots root)
-               (set-add! all-remotes r)
+               (set-add! all-remotes (Remote-address r))
                (printf
                  "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
                  root
-                 r
-                 hostname))
+                 (Remote-address r)
+                 (Remote-hostname r)))
             remotes)]
          [_ (void)]))
     repos)
