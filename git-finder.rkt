@@ -2,11 +2,9 @@
 
 (require racket/os)
 
-(define url? string?) ; TODO use url lib
-
 (define local? path-string?)
 (define locals? (listof local?))
-(define remote? (or/c path-string? url?))
+(define remote? string?)
 (define remotes? (listof remote?))
 
 (define-struct/contract Repo
