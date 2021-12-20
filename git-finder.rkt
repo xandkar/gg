@@ -23,6 +23,7 @@
     (process cmd))
   (define lines (port->lines stdout))
   (ctrl 'wait)
+  ; TODO Print stderr if not 'done-ok
   (invariant-assertion 'done-ok (ctrl 'status))
   (close-output-port stdin)
   (close-input-port stdout)
@@ -83,43 +84,71 @@
 
 (define/contract (print-table repos)
   (-> (listof Repo?) void?)
-  (define (output hostname root tag locations)
+  (define (output root hostname tag locations)
     (for-each
       (λ (location)
-         (displayln (string-join (list hostname root tag location) " ")))
+         (displayln (string-join (list root hostname tag location) " ")))
       locations))
   (for-each
     (λ (repo)
        (match-define (Repo hostname root locals remotes) repo)
-       (output hostname root "local" locals)
-       (output hostname root "remote" remotes)
+       (output root hostname "local" locals)
+       (output root hostname "remote" remotes)
        (newline) ; So that same-root locations are visually grouped.
        )
     repos))
 
 (define/contract (print-graph repos)
   (-> (listof Repo?) void?)
+  (define all-roots (mutable-set))
+  (define all-locals (mutable-set))
+  (define all-remotes (mutable-set))
   (displayln "digraph {")
   (for-each
     (λ (r)
        ; TODO Color and shape codes for: root, local and remote.
-       ; locals
        (match r
-         [(Repo _hostname root (and locals (list* _ _ _)) _)
+         [(Repo hostname root (and locals (list* _ _ _)) remotes)
           (for-each
-            (λ (l) (printf "~v -> ~v;~n" root l))
-            locals)]
-         [_ (void)])
-
-       ; remotes
-       (match r
-         [(Repo _hostname root _ (and remotes (list* _ _ _)))
+            (λ (l)
+               (set-add! all-roots root)
+               (set-add! all-locals l)
+               (printf
+                 "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
+                 root
+                 l
+                 hostname))
+            locals)
           (for-each
-            (λ (r) (printf "~v -> ~v;~n" root r))
+            (λ (r)
+               (set-add! all-roots root)
+               (set-add! all-remotes r)
+               (printf
+                 "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
+                 root
+                 r
+                 hostname))
             remotes)]
-         [_ (void)])
-       )
+         [_ (void)]))
     repos)
+  (set-for-each
+    all-roots
+    (λ (r)
+       (printf
+         "~v [shape=point style=filled, fillcolor=yellowgreen fontcolor=white, fontname=monospace, fontsize=8];~n"
+         r)))
+  (set-for-each
+    all-locals
+    (λ (l)
+       (printf
+         "~v [shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8];~n"
+         l)))
+  (set-for-each
+    all-remotes
+    (λ (r)
+       (printf
+         "~v [shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
+         r)))
   (displayln "}"))
 
 (module+ main
