@@ -29,7 +29,6 @@
   (define remotes (port->lines stdout))
   (ctrl 'wait)
   (invariant-assertion 'done-ok (ctrl 'status))
-  ;(invariant-assertion '() (port->lines stderr))
   (close-output-port stdin)
   (close-input-port stdout)
   (close-input-port stderr)
@@ -37,13 +36,6 @@
 
 (define/contract (git-dir->root-digest git-dir-path)
   (-> local? (or/c #f string?))
-  (define harmless-error-msg
-    ; TODO Use regex to match any branch name
-    "fatal: your current branch 'master' does not have any commits yet")
-  ; "fatal: not a git repository: ..."
-  (define (harmless-error? msg)
-    (string=? msg harmless-error-msg))
-  (define (unexpected-error? msg) (not (harmless-error? msg)))
   (define cmd
     (string-append
       "git --git-dir="
@@ -54,7 +46,6 @@
     (process cmd))
   (ctrl 'wait)
   (invariant-assertion 'done-ok (ctrl 'status))
-  ;(invariant-assertion '() (filter unexpected-error? (port->lines stderr)))
   (define digest
     (match (port->lines stdout)
       ['() #f]
