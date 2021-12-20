@@ -10,6 +10,7 @@
 
 (define locals? (listof Local?))
 
+;; TODO Consider making Remote a child of Local
 (define-struct/contract Remote
   ([hostname string?]
    [address string?])
@@ -72,8 +73,18 @@
   (define (remotes repos) (uniq (append* (map third repos))))
   (map (λ (repos-with-shared-root-commit)
           (Repo (root repos-with-shared-root-commit)
-                ; TODO fetch description
-                (map (λ (path) (Local hostname path #f))
+                (map (λ (path-git)
+                        (define path-description (build-path path-git "description"))
+                        (define description
+                          (if (file-exists? path-description)
+                              (match (file->lines path-description)
+                                ['() #f]
+                                [(list* line _)
+                                 (if (string-prefix? line "Unnamed repository;")
+                                     #f
+                                     line)])
+                              #f))
+                        (Local hostname path-git description))
                      (locals repos-with-shared-root-commit))
                 (map (λ (addr) (Remote hostname addr))
                      (remotes repos-with-shared-root-commit))))
@@ -124,7 +135,7 @@
           (for-each
             (λ (l)
                (set-add! all-roots root)
-               (set-add! all-locals (Local-path l))
+               (set-add! all-locals l)
                (printf
                  "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
                  root
@@ -134,7 +145,7 @@
           (for-each
             (λ (r)
                (set-add! all-roots root)
-               (set-add! all-remotes (Remote-address r))
+               (set-add! all-remotes r)
                (printf
                  "~v -> ~v [label=~v, fontname=monospace, fontsize=8];~n"
                  root
@@ -152,15 +163,22 @@
   (set-for-each
     all-locals
     (λ (l)
+       (define description (Local-description l))
+       (define path (Local-path l))
+       (define label
+         (if description
+             (format "~a~n~a" path description)
+             (format "~a"     path)))
        (printf
-         "~v [shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8];~n"
-         l)))
+         "~v [label=~v shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8];~n"
+         path
+         label)))
   (set-for-each
     all-remotes
     (λ (r)
        (printf
          "~v [shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
-         r)))
+         (Remote-address r))))
   (displayln "}"))
 
 (module+ main
