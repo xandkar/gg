@@ -54,8 +54,8 @@
 (define uniq
   (compose set->list list->set))
 
-(define/contract (find-git-repos hostname search-paths)
-  (-> string? (listof path-string?) (listof Repo?))
+(define/contract (find-git-repos hostname search-paths exclude-prefix exclude-regexp)
+  (-> string? (listof path-string?) (listof path-string?) (listof pregexp?) (listof Repo?))
   (define (root repos) (first (first repos))) ; All roots are the same in a group
   (define (locals repos) (map second repos))
   (define (remotes repos) (uniq (append* (map third repos))))
@@ -73,7 +73,13 @@
                                      (cons repo repos)
                                      repos))
                               '()
-                              (find-git-dirs search-paths)))))
+                              (filter
+                                (λ (path)
+                                   (and (not (ormap (curry string-prefix? path)
+                                                    exclude-prefix))
+                                        (not (ormap (λ (px) (regexp-match? px path))
+                                                    exclude-regexp))))
+                                (find-git-dirs search-paths))))))
 
 (define/contract (print-table repos)
   (-> (listof Repo?) void?)
@@ -121,7 +127,9 @@
   ; - TODO "collect" data for current host
   ; - TODO "integrate" data from per-host data files into a graphviz file
 
-  (let ([out-format 'table])
+  (let ([out-format 'table]
+        [exclude-prefix (mutable-set)]
+        [exclude-regexp (mutable-set)])
     (command-line
       #:program "git-finder"
 
@@ -133,6 +141,17 @@
        "Multi-homed repos in DOT language for Graphviz."
        (set! out-format 'graph)]
 
+      #:multi
+      [("-e" "--exclude-prefix")
+       directory "Directory subtree prefix to exclude the found candidate paths."
+       (invariant-assertion path-string? directory)
+       (set-add! exclude-prefix directory)]
+      [("-x" "--exclude-regexp")
+       perl-like-regexp "Pattern to exclude from the found candidate paths."
+       (let ([px (pregexp perl-like-regexp (λ (err-msg) err-msg))])
+         (invariant-assertion pregexp? px)
+         (set-add! exclude-regexp px))]
+
       #:args search-paths
       (invariant-assertion (listof path-string?) search-paths)
 
@@ -141,7 +160,11 @@
           [(table) print-table]
           [(graph) print-graph]))
       (define t0 (current-inexact-milliseconds))
-      (define repos (find-git-repos (gethostname) search-paths))
+      (define repos
+        (find-git-repos (gethostname)
+                        search-paths
+                        (set->list exclude-prefix)
+                        (set->list exclude-regexp)))
       (output repos)
       (define t1 (current-inexact-milliseconds))
       (eprintf "Found ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
