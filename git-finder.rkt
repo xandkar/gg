@@ -24,18 +24,23 @@
       git-dir-path
       " remote -v | awk '{print $2}' | sort -u"))
   (match-define
-    (list stdout _stdin _pid stderr ctrl)
+    (list stdout stdin _pid stderr ctrl)
     (process cmd))
+  (define remotes (port->lines stdout))
   (ctrl 'wait)
   (invariant-assertion 'done-ok (ctrl 'status))
-  (invariant-assertion '() (port->lines stderr))
-  (port->lines stdout))
+  ;(invariant-assertion '() (port->lines stderr))
+  (close-output-port stdin)
+  (close-input-port stdout)
+  (close-input-port stderr)
+  remotes)
 
 (define/contract (git-dir->root-digest git-dir-path)
   (-> local? (or/c #f string?))
   (define harmless-error-msg
     ; TODO Use regex to match any branch name
     "fatal: your current branch 'master' does not have any commits yet")
+  ; "fatal: not a git repository: ..."
   (define (harmless-error? msg)
     (string=? msg harmless-error-msg))
   (define (unexpected-error? msg) (not (harmless-error? msg)))
@@ -45,25 +50,36 @@
       git-dir-path
       " log --pretty=oneline --reverse | head -1 | awk '{print $1}'"))
   (match-define
-    (list stdout _stdin _pid stderr ctrl)
+    (list stdout stdin _pid stderr ctrl)
     (process cmd))
   (ctrl 'wait)
   (invariant-assertion 'done-ok (ctrl 'status))
-  (invariant-assertion '() (filter unexpected-error? (port->lines stderr)))
-  (match (port->lines stdout)
-    ['() #f]
-    [(list digest) digest]
-    [_ (assert-unreachable)]))
+  ;(invariant-assertion '() (filter unexpected-error? (port->lines stderr)))
+  (define digest
+    (match (port->lines stdout)
+      ['() #f]
+      [(list digest) digest]
+      [_ (assert-unreachable)]))
+  (close-output-port stdin)
+  (close-input-port stdout)
+  (close-input-port stderr)
+  digest)
 
 (define/contract (find-git-dirs search-paths)
-  (-> (listof path-string?) (stream/c local?))
+  (-> (listof path-string?) (listof local?))
   ; TODO Check stderr?
   (define (find search-path)
     (match-define
-      (list stdout _stdin _pid _stderr _ctrl)
+      (list stdout stdin _pid stderr ctrl)
       (process (string-append "find " search-path " -type d -name .git")))
-    (sequence->stream (in-lines stdout)))
-  (apply stream-append (map find search-paths)))
+    (define dirs (sequence->list (in-lines stdout)))
+    (ctrl 'wait)
+    (invariant-assertion 'done-ok (ctrl 'status))
+    (close-output-port stdin)
+    (close-input-port stdout)
+    (close-input-port stderr)
+    dirs)
+  (append* (map find search-paths)))
 
 (define uniq
   (compose set->list list->set))
@@ -78,16 +94,16 @@
                 (root repos-with-shared-root-commit)
                 (locals repos-with-shared-root-commit)
                 (remotes repos-with-shared-root-commit)))
-       (group-by first (stream-fold (λ (repos dir)
-                                       ; TODO git lookups can be done concurrently
-                                       (define root (git-dir->root-digest dir))
-                                       (define remotes (git-dir->remotes dir))
-                                       (define repo (list root dir remotes))
-                                       (if root
-                                           (cons repo repos)
-                                           repos))
-                                    '()
-                                    (find-git-dirs search-paths)))))
+       (group-by first (foldl (λ (dir repos)
+                                 ; TODO git lookups can be done concurrently
+                                 (define root (git-dir->root-digest dir))
+                                 (define remotes (git-dir->remotes dir))
+                                 (define repo (list root dir remotes))
+                                 (if root
+                                     (cons repo repos)
+                                     repos))
+                              '()
+                              (find-git-dirs search-paths)))))
 
 (define/contract (print-table repos)
   (-> (listof Repo?) void?)
@@ -154,9 +170,12 @@
         (case out-format
           [(table) print-table]
           [(graph) print-graph]))
+      (define t0 (current-inexact-milliseconds))
       (define repos (find-git-repos (gethostname) search-paths))
       (output repos)
-      (eprintf "Found ~a roots ~a locals, ~a remotes.~n"
+      (define t1 (current-inexact-milliseconds))
+      (eprintf "Found ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
                (length repos)
                (length (uniq (append* (map Repo-locals repos))))
-               (length (uniq (append* (map Repo-remotes repos))))))))
+               (length (uniq (append* (map Repo-remotes repos))))
+               (real->decimal-string (/ (- t1 t0) 1000) 3)))))
