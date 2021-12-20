@@ -16,60 +16,39 @@
    [remotes remotes?])
   #:transparent)
 
+(define/contract (exe cmd)
+  (-> string? (listof string?))
+  (match-define
+    (list stdout stdin _pid stderr ctrl)
+    (process cmd))
+  (define lines (port->lines stdout))
+  (ctrl 'wait)
+  (invariant-assertion 'done-ok (ctrl 'status))
+  (close-output-port stdin)
+  (close-input-port stdout)
+  (close-input-port stderr)
+  lines)
+
 (define/contract (git-dir->remotes git-dir-path)
   (-> path-string? locals?)
-  (define cmd
+  (exe
     (string-append
-      "git --git-dir="
-      git-dir-path
-      " remote -v | awk '{print $2}' | sort -u"))
-  (match-define
-    (list stdout stdin _pid stderr ctrl)
-    (process cmd))
-  (define remotes (port->lines stdout))
-  (ctrl 'wait)
-  (invariant-assertion 'done-ok (ctrl 'status))
-  (close-output-port stdin)
-  (close-input-port stdout)
-  (close-input-port stderr)
-  remotes)
+      "git --git-dir=" git-dir-path " remote -v | awk '{print $2}' | sort -u")))
 
 (define/contract (git-dir->root-digest git-dir-path)
-  (-> local? (or/c #f string?))
+  (-> path-string? (or/c #f string?))
   (define cmd
     (string-append
-      "git --git-dir="
-      git-dir-path
-      " log --pretty=oneline --reverse | head -1 | awk '{print $1}'"))
-  (match-define
-    (list stdout stdin _pid stderr ctrl)
-    (process cmd))
-  (ctrl 'wait)
-  (invariant-assertion 'done-ok (ctrl 'status))
-  (define digest
-    (match (port->lines stdout)
-      ['() #f]
-      [(list digest) digest]
-      [_ (assert-unreachable)]))
-  (close-output-port stdin)
-  (close-input-port stdout)
-  (close-input-port stderr)
-  digest)
+      "git --git-dir=" git-dir-path " log --pretty=oneline --reverse | head -1 | awk '{print $1}'"))
+  (match (exe cmd)
+    ['() #f]
+    [(list digest) digest]
+    [_ (assert-unreachable)]))
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path-string?) (listof local?))
-  ; TODO Check stderr?
   (define (find search-path)
-    (match-define
-      (list stdout stdin _pid stderr ctrl)
-      (process (string-append "find " search-path " -type d -name .git")))
-    (define dirs (sequence->list (in-lines stdout)))
-    (ctrl 'wait)
-    (invariant-assertion 'done-ok (ctrl 'status))
-    (close-output-port stdin)
-    (close-input-port stdout)
-    (close-input-port stderr)
-    dirs)
+    (exe (string-append "find " search-path " -type d -name .git")))
   (append* (map find search-paths)))
 
 (define uniq
