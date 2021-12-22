@@ -5,7 +5,16 @@
 (require racket/os
          xml)
 
+(module+ test
+  (require rackunit))
+
 (define-struct/contract Remote
+  ; TODO Check if addr is actually a local path and mark:
+  ;      - whether it exists
+  ;      - whether it is _a_ git repo at all
+  ;        - whether it _the_ correct git repo (shares root)
+  ; TODO Maybe optionally check the actual remote addresses as well.
+  ; TODO Mark the above ^^^ stuff in this struct or some table?
   ([name string?]
    [addr string?])
   #:transparent)
@@ -24,6 +33,9 @@
   ([root string?]
    [locals locals?])
   #:transparent)
+
+(define out-format? (or/c 'table 'graph))
+(define data-source? (or/c 'search 'read))
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
@@ -116,7 +128,7 @@
                                               exclude-regexp))))
                           (find-git-dirs search-paths))))))
 
-(define/contract (print-table repos)
+(define/contract (output-table repos)
   (-> (listof Repo?) void?)
   (define (row . columns) (displayln (string-join columns " ")))
   (for* ([r repos]
@@ -130,7 +142,133 @@
              (Remote-name m)
              (Remote-addr m))))
 
-(define/contract (print-graph repos)
+(define row?
+  (or/c (list/c string? string? string? string? string?)
+        (list/c string? string? string?)))
+
+(define/contract (file->rows path)
+  (-> path-string? (listof row?))
+  (map string-split (file->lines path)))
+
+(define/contract (rows->repos rows)
+  (-> (listof row?) (listof Repo?))
+  ; <root> <host> <path> [<name> <address>]
+  (define row-root first)
+  (define row-host second)
+  (define row-path third)
+
+  ; Single local per repo, so may have duplicate-root repos in the list:
+  (define root-per-local
+    (for*/list
+      ([rows-sharing-root           (group-by row-root rows)]
+       [rows-sharing-root-host      (group-by row-host rows-sharing-root)]
+       [rows-sharing-root-host-path (group-by row-path rows-sharing-root-host)])
+
+      (define remotes
+        (append* (map (λ (row)
+                         (match row
+                           [(list _ _ _ name addr) (list (Remote name addr))]
+                           [(list _ _ _)           (list)]))
+                      rows-sharing-root-host-path)))
+
+      ; XXX First is as good as any, since these fields are shared:
+      (define root (row-root (first rows-sharing-root-host-path)))
+      (define host (row-host (first rows-sharing-root-host-path)))
+      (define path (row-path (first rows-sharing-root-host-path)))
+
+      (define locals (list (Local host path #f remotes)))
+      (Repo root locals)))
+
+  (define merged-locals-by-root
+    (foldl
+      (λ (repos-sharing-root repos)
+         ; First is as good as any other:
+         (define root (Repo-root (first repos-sharing-root)))
+         (define locals (append* (map Repo-locals repos-sharing-root)))
+         (define repo (Repo root locals))
+         (cons repo repos))
+      '()
+      (group-by Repo-root root-per-local)))
+
+  merged-locals-by-root)
+
+(define (file->repos path)
+  (rows->repos (file->rows path)))
+
+(define/contract (input-table paths)
+  (-> (listof path-string?) (listof Repo?))
+  (append* (map file->repos paths)))
+
+(module+ test
+  ; TODO [x] Test : rows -> repos
+  ; TODO [ ] Test : repos -> file -> repos
+  ; TODO [x] Test :   single file -> repos
+  ; TODO [ ] Test : multiple files -> repos
+  ; TODO [ ] Test : single-host-filesystem -> repos -> file -> repos
+  ; TODO [ ] Test :  multi-host-filesystem -> repos -> file -> repos
+
+  (let* ([test-file (make-temporary-file)]
+         [test-lines '("root host dir name addr")])
+    (display-lines-to-file test-lines test-file #:exists 'replace)
+    (check-equal?
+      (file->rows test-file)
+      '(("root" "host" "dir" "name" "addr")))
+    (check-equal?
+      (file->repos test-file)
+      (list (Repo "root" (list (Local "host" "dir" #f (list (Remote "name" "addr")))))))
+    (delete-file test-file))
+
+  (check-equal?
+    (rows->repos '(("r" "h" "d" "n" "a")))
+    (list (Repo "r" (list (Local "h" "d" #f (list (Remote "n" "a")))))))
+
+  (check-equal?
+    (rows->repos
+      '(("r" "h" "d" "n1" "a1")
+        ("r" "h" "d" "n2" "a2")))
+    (list (Repo "r" (list (Local "h" "d" #f (list (Remote "n1" "a1")
+                                                  (Remote "n2" "a2")))))))
+
+  (let* ([given-rows '(("r" "h" "d1" "n1" "a1")
+                       ("r" "h" "d1" "n2" "a2")
+                       ("r" "h" "d2" "n2" "a2"))]
+         [actual-repos (rows->repos given-rows)]
+         [expected-repos
+           (list (Repo "r" (list (Local "h" "d1" #f (list (Remote "n1" "a1")
+                                                          (Remote "n2" "a2")))
+                                 (Local "h" "d2" #f (list (Remote "n2" "a2"))))))])
+    (check-equal? 1 (length actual-repos))
+    (check-equal? actual-repos expected-repos))
+
+  (let* ([given-rows '(("r" "h1" "d1" "n1" "a1")
+                       ("r" "h1" "d1" "n2" "a2")
+                       ("r" "h1" "d2" "n2" "a2")
+                       ("r" "h2" "d2" "n2" "a2"))]
+         [actual-repos (rows->repos given-rows)]
+         [expected-repos
+           (list (Repo "r" (list (Local "h1" "d1" #f (list (Remote "n1" "a1")
+                                                           (Remote "n2" "a2")))
+                                 (Local "h1" "d2" #f (list (Remote "n2" "a2")))
+                                 (Local "h2" "d2" #f (list (Remote "n2" "a2"))))))])
+    (check-equal? 1 (length actual-repos))
+    (check-equal? actual-repos expected-repos))
+
+  (let* ([given-rows '(("r1" "h1" "d1" "n1" "a1")
+                       ("r1" "h1" "d1" "n2" "a2")
+                       ("r1" "h1" "d2" "n2" "a2")
+                       ("r1" "h2" "d2" "n2" "a2")
+                       ("r2" "h2" "d3" "n1" "a3"))]
+         [actual-repos (rows->repos given-rows)]
+         [expected-repos
+           (list (Repo "r2" (list (Local "h2" "d3" #f (list (Remote "n1" "a3")))))
+                 (Repo "r1" (list (Local "h1" "d1" #f (list (Remote "n1" "a1")
+                                                            (Remote "n2" "a2")))
+                                  (Local "h1" "d2" #f (list (Remote "n2" "a2")))
+                                  (Local "h2" "d2" #f (list (Remote "n2" "a2"))))))])
+    (check-equal? 2 (length actual-repos))
+    (check-equal? actual-repos expected-repos)))
+
+(define/contract (output-graph repos)
   (-> (listof Repo?) void?)
   (define all-roots (mutable-set))
   (define all-locals (mutable-set))
@@ -152,7 +290,6 @@
   (displayln "digraph {")
   (for-each
     (λ (r)
-       ; TODO Color and shape codes for: root, local and remote.
        (match r
          [(Repo root (and locals (list* _ _ _)))
           (for-each
@@ -191,6 +328,8 @@
   (set-for-each
     all-remotes
     (λ (r)
+       ; TODO Use shape=folder for scheme-less remotes (i.e. dirs).
+       ; TODO Use fillcolor=red for local references to nonexisting dir.
        (printf
          "~v [shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
          r)))
@@ -202,14 +341,23 @@
   ; - TODO "integrate" data from per-host data files into a graphviz file
 
   (let ([out-format 'table]
+        [data-source 'search]
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
     (command-line
       #:program "git-finder"
 
       #:once-any
+      [("-s" "--data-search")
+       "Discover data from a filesystem search in the given paths. [DEFAULT]"
+       (set! data-source 'search)]
+      [("-f" "--data-file")
+       "Read data from the given table files (from previous searches)."
+       (set! data-source 'read)]
+
+      #:once-any
       [("-t" "--table")
-       "All found repos in a tabular text format."
+       "All found repos in a tabular text format. [DEFAULT]"
        (set! out-format 'table)]
       [("-g" "--graph-dupes")
        "Multi-homed repos in DOT language for Graphviz."
@@ -226,21 +374,28 @@
          (invariant-assertion pregexp? px)
          (set-add! exclude-regexp px))]
 
-      #:args search-paths
-      (invariant-assertion (listof path-string?) search-paths)
+      #:args paths
+      (invariant-assertion (listof path-string?) paths)
+      (invariant-assertion out-format?  out-format)
+      (invariant-assertion data-source? data-source)
+
+      (define input
+        (case data-source
+          [(search) (λ () (find-git-repos (gethostname)
+                                          paths
+                                          (set->list exclude-prefix)
+                                          (set->list exclude-regexp)))]
+          [(read) (λ () (input-table paths))]))
 
       (define output
         (case out-format
-          [(table) print-table]
-          [(graph) print-graph]))
+          [(table) output-table]
+          [(graph) output-graph]))
+
       (define t0 (current-inexact-milliseconds))
-      (define repos
-        (find-git-repos (gethostname)
-                        search-paths
-                        (set->list exclude-prefix)
-                        (set->list exclude-regexp)))
-      (output repos)
+      (define repos (input))
       (define t1 (current-inexact-milliseconds))
+      (output repos)
       (eprintf "Found ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
                (length repos)
                (length (uniq (append* (map Repo-locals repos))))
