@@ -273,20 +273,31 @@
   (define all-roots (mutable-set))
   (define all-locals (mutable-set))
   (define all-remotes (mutable-set))
-  (define (local-id l) (format "~a:~a" (Local-hostname l) (Local-path l)))
-  (define (local-label l)
+
+  (define (edge-label-root2local _r _l) "\"\"")
+  (define (edge-label-local2remote _l r) (format "~v" (Remote-name r)))
+
+  (define (node-id-root r) (format "\"root:~a\"" r))
+  (define (node-id-remote r) (format "\"remote:~a\"" (Remote-addr r)))
+  (define (node-id-local l) (format "\"local:~a:~a\"" (Local-hostname l) (Local-path l)))
+
+  (define (node-label-root r) (format "~v" r))
+  (define (node-label-remote r) (format "~v" (Remote-addr r)))
+  (define (node-label-local l)
     (define hostname (Local-hostname l))
     (define description (let ([d (Local-description l)]) (if d d "")))
     (define path (Local-path l))
-    (xexpr->string
-      `(table
-        ([border      "0"]
-         [cellborder  "0"]
-         [cellpadding "1"]
-         [cellspacing "0"])
-        (tr (td (b "host ")) (td ([align "left"]) ,hostname))
-        (tr (td (b "path ")) (td ([align "left"]) ,path))
-        (tr (td (b "desc ")) (td ([align "left"]) ,description)))))
+    (format "<~a>"
+            (xexpr->string
+              `(table
+                ([border      "0"]
+                 [cellborder  "0"]
+                 [cellpadding "1"]
+                 [cellspacing "0"])
+                (tr (td (b "host ")) (td ([align "left"]) ,hostname))
+                (tr (td (b "path ")) (td ([align "left"]) ,path))
+                (tr (td (b "desc ")) (td ([align "left"]) ,description))))))
+
   (displayln "digraph {")
   (for-each
     (λ (r)
@@ -297,42 +308,52 @@
                (set-add! all-roots root)
                (set-add! all-locals l)
                (printf
-                 "~v -> ~v [fontname=monospace, fontsize=8, color=yellowgreen];~n"
-                 root
-                 (local-id l))
+                 "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
+                 (node-id-root root)
+                 (node-id-local l)
+                 (edge-label-root2local r l))
                (for-each
                  (λ (r)
-                    (set-add! all-remotes (Remote-addr r))
+                    (set-add! all-remotes r)
                     (printf
-                      "~v -> ~v [label=~v, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
-                      (local-id l)
-                      (Remote-addr r)
-                      (Remote-name r)))
+                      "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
+                      (node-id-local l)
+                      (node-id-remote r)
+                      (edge-label-local2remote l r)))
                  (Local-remotes l)))
             locals)]
          [_ (void)]))
     repos)
+
+  (invariant-assertion (set/c string? #:kind 'mutable) all-roots)
   (set-for-each
     all-roots
     (λ (r)
        (printf
-         "~v [shape=rectangle, style=filled, fillcolor=yellowgreen, fontname=monospace, fontsize=8];~n"
-         r)))
+         "~a [label=~a, shape=rectangle, style=filled, fillcolor=yellowgreen, fontname=monospace, fontsize=8];~n"
+         (node-id-root r)
+         (node-label-root r))))
+
+  (invariant-assertion (set/c Local? #:kind 'mutable) all-locals)
   (set-for-each
     all-locals
     (λ (l)
        (printf
-         "~v [label=<~a> shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8, fontcolor=black];~n"
-         (local-id l)
-         (local-label l))))
+         "~a [label=~a shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8, fontcolor=black];~n"
+         (node-id-local l)
+         (node-label-local l))))
+
+  (invariant-assertion (set/c Remote? #:kind 'mutable) all-remotes)
   (set-for-each
     all-remotes
     (λ (r)
        ; TODO Use shape=folder for scheme-less remotes (i.e. dirs).
        ; TODO Use fillcolor=red for local references to nonexisting dir.
        (printf
-         "~v [shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
-         r)))
+         "~a [label=~a, shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
+         (node-id-remote r)
+         (node-label-remote r))))
+
   (displayln "}"))
 
 (module+ main
