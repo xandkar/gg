@@ -39,6 +39,7 @@
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
+  ; TODO Switch from (process command ...) to (process* executable args ...)
   (match-define
     (list stdout stdin _pid stderr ctrl)
     (process cmd))
@@ -56,6 +57,7 @@
 
 (define/contract (git-dir->remotes git-dir-path)
   (-> path-string? (listof Remote?))
+  ; TODO Replace piping to unix filters with Racket-written filters.
   (define cmd
     (string-append
       "git --git-dir=" git-dir-path " remote -v | awk '{print $1, $2}' | sort -u"))
@@ -66,6 +68,7 @@
 
 (define/contract (git-dir->root-digest git-dir-path)
   (-> path-string? (or/c #f string?))
+  ; TODO Replace piping to unix filters with Racket-written filters.
   (define cmd
     (string-append
       "git --git-dir=" git-dir-path " log --pretty=oneline --reverse | head -1 | awk '{print $1}'"))
@@ -77,6 +80,7 @@
 (define/contract (find-git-dirs search-paths)
   (-> (listof path-string?) (listof path-string?))
   (define (find search-path)
+    ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
     (exe (string-append "find " search-path " -type d -name .git")))
   (append* (map find search-paths)))
 
