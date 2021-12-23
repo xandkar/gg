@@ -383,7 +383,7 @@
   ; - TODO "collect" data for current host
   ; - TODO "integrate" data from per-host data files into a graphviz file
 
-  (let ([out-format     'table]
+  (let ([out-format     'serial]
         [out-dst        'stdout]
         [out-filters    (mutable-set)]
         [data-source    'search]
@@ -438,10 +438,10 @@
       ; Output format:
       #:once-any
       [("-s" "--serialize")
-       "Output in Racket serialization format (for self-consumption)."
+       "Output in Racket serialization format (for self-consumption). [DEFAULT]"
        (set! out-format 'serial)]
       [("-t" "--table")
-       "Output in a tabular text format (for Unix tools consumption). [DEFAULT]"
+       "Output in a tabular text format (for Unix tools consumption)."
        (set! out-format 'table)]
       [("-g" "--graph")
        "Output in DOT language (for Graphviz)."
