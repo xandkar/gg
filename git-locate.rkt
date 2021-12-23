@@ -397,6 +397,8 @@
       ; TODO stdin is default if no input file paths provided
       ; TODO make this work: git-locate --search ~ | git-locate --graph | neato | feh
 
+      ; TODO overhaul option prefixes: --in-.., --out-.., ...
+
       ; Input actions:
       #:once-any
       [("--search")
