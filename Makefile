@@ -1,3 +1,3 @@
 .PHONY: test
 test:
-	raco test git-finder.rkt
+	raco test git-locate.rkt
