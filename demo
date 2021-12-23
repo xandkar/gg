@@ -1,0 +1,21 @@
+#! /bin/sh
+
+search_paths=$@
+
+case "$search_paths" in
+    '') search_paths=..;; # XXX Assuming we're located somewhere with other repos
+esac
+
+DATA_DIR=data
+
+prefix="$DATA_DIR"/repos."$(hostname)"."$(date +'%Y-%m-%d--%H:%M:%S%z')"
+data_file="$prefix".rktd
+graph_file="$prefix".dot
+image_file="$prefix".png
+
+mkdir -p "$DATA_DIR"
+
+./git-locate.rkt --search --serialize --output-file "$data_file" $search_paths && \
+./git-locate.rkt --read-from-serialized --graph --output-file "$graph_file" "$data_file" && \
+neato -Tpng -Goverlap=false -o "$image_file" "$graph_file" && \
+sxiv "$image_file"
