@@ -286,6 +286,13 @@
     (check-equal? 2 (length actual-repos))
     (check-equal? actual-repos expected-repos)))
 
+;; At least 2 locals.
+(define/contract (multi-homed? repo)
+  (-> Repo? boolean?)
+  (match (Repo-locals repo)
+    [(list* _ _ _) #t]
+    [(list* _) #f]))
+
 (define/contract (output-graph repos)
   (-> (listof Repo?) void?)
   (define all-roots (mutable-set))
@@ -318,29 +325,26 @@
 
   (displayln "digraph {")
   (for-each
-    (λ (r)
-       (match r
-         [(Repo root (and locals (list* _ _ _)))
-          (for-each
-            (λ (l)
-               (set-add! all-roots root)
-               (set-add! all-locals l)
-               (printf
-                 "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
-                 (node-id-root root)
-                 (node-id-local l)
-                 (edge-label-root2local r l))
-               (for-each
-                 (λ (r)
-                    (set-add! all-remotes r)
-                    (printf
-                      "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
-                      (node-id-local l)
-                      (node-id-remote r)
-                      (edge-label-local2remote l r)))
-                 (Local-remotes l)))
-            locals)]
-         [_ (void)]))
+    (λ (repo)
+       (for-each
+         (λ (loc)
+            (set-add! all-roots (Repo-root repo))
+            (set-add! all-locals loc)
+            (printf
+              "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
+              (node-id-root (Repo-root repo))
+              (node-id-local loc)
+              (edge-label-root2local (Repo-root repo) loc))
+            (for-each
+              (λ (rem)
+                 (set-add! all-remotes rem)
+                 (printf
+                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
+                   (node-id-local loc)
+                   (node-id-remote rem)
+                   (edge-label-local2remote loc rem)))
+              (Local-remotes loc)))
+         (Repo-locals repo)))
     repos)
 
   (invariant-assertion (set/c string? #:kind 'mutable) all-roots)
@@ -381,6 +385,7 @@
 
   (let ([out-format     'table]
         [out-dst        'stdout]
+        [out-filters    (mutable-set)]
         [data-source    'search]
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
@@ -402,11 +407,11 @@
       ; Input filters:
       #:multi
       [("-e" "--exclude-prefix")
-       directory "Directory subtree prefix to exclude the found candidate paths."
+       directory "Input filter: directory subtree prefix to exclude from the found candidate paths."
        (invariant-assertion path-string? directory)
        (set-add! exclude-prefix directory)]
       [("-x" "--exclude-regexp")
-       perl-like-regexp "Pattern to exclude from the found candidate paths."
+       perl-like-regexp "Input filter: pattern to exclude from the found candidate paths."
        (let ([px (pregexp perl-like-regexp (λ (err-msg) err-msg))])
          (invariant-assertion pregexp? px)
          (set-add! exclude-regexp px))]
@@ -415,22 +420,24 @@
       ;     p <prefix>
       ;     x <regexp>
 
-      ; TODO Output filters:
-      ;      - orphans (no remotes)
-      ;      - local forks (multple local dir)
-      ;      - What else?
+      ; Output filters:
+      #:once-each
+      ; TODO orphans (no remotes)
+      ; TODO What else?
+      [("--multi-homed")
+       "Output filter: only repos with multiple local directories (local forks)."
+       (set-add! out-filters multi-homed?)]
 
       ; Output format:
       #:once-any
       [("-s" "--serialize")
-       "Output ALL repos in Racket serialization format for self-consumption."
+       "Output in Racket serialization format (for self-consumption)."
        (set! out-format 'serial)]
       [("-t" "--table")
-       "Output ALL repos in a tabular text format for Unix tools consumption. [DEFAULT]"
+       "Output in a tabular text format (for Unix tools consumption). [DEFAULT]"
        (set! out-format 'table)]
-      ; TODO Remove multi-home requirement after output filters are implemented.
       [("-g" "--graph")
-       "Output ONLY MULTI-HOMED repos in DOT language for Graphviz."
+       "Output in DOT language (for Graphviz)."
        (set! out-format 'graph)]
       ; TODO --html
 
@@ -446,6 +453,8 @@
       (invariant-assertion (listof path-string?) paths)
       (invariant-assertion out-format?  out-format)
       (invariant-assertion data-source? data-source)
+      (invariant-assertion (set/c (-> Repo? boolean?) #:kind 'mutable) out-filters)
+      ; TODO Make sure all other option containers are asserted!
 
       (define input
         (match data-source
@@ -467,7 +476,13 @@
           [(graph) output-graph]))
 
       (define t0 (current-inexact-milliseconds))
-      (define repos (input))
+      ; TODO Time filters separately from reading input.
+      (define repos
+        (let ([repos (input)])
+          (match (set->list out-filters)
+            ['() repos]
+            [(and (list* _ _) filters)
+             (filter (λ (r) (andmap (λ (f) (f r)) filters)) repos)])))
       (define t1 (current-inexact-milliseconds))
       (match out-dst
         ['stdout (output repos)]
