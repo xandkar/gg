@@ -15,7 +15,6 @@ image_file="$prefix".png
 
 mkdir -p "$DATA_DIR"
 
-./git-locate --search --output-file "$data_file" $search_paths && \
-./git-locate --read-from-serialized --graph --multi-homed --output-file "$graph_file" "$data_file" && \
+./git-locate --search $search_paths | ./git-locate --read --graph --multi-homed -o "$graph_file" && \
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file" && \
 sxiv "$image_file"

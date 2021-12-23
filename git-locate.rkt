@@ -49,7 +49,7 @@
 
 (define out-format? (or/c 'table 'graph 'serial))
 (define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
-(define data-source? (or/c 'search 'read-table 'read-serial))
+(define data-source? (or/c 'search 'read 'read-table))
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
@@ -404,12 +404,12 @@
       [("--search")
        "Data discovered via a filesystem search in the given paths. [DEFAULT]"
        (set! data-source 'search)]
-      [("--read-from-table")
+      [("--read")
+       "Data read from the given serialization files (from previous searches)."
+       (set! data-source 'read)]
+      [("--read-table")
        "Data read from the given table files (from previous searches)."
        (set! data-source 'read-table)]
-      [("-d" "--read-from-serialized")
-       "Data read from the given serialization files (from previous searches)."
-       (set! data-source 'read-serial)]
 
       ; Input filters:
       #:multi
@@ -437,7 +437,7 @@
 
       ; Output format:
       #:once-any
-      [("-s" "--serialize")
+      [("-s" "--serial")
        "Output in Racket serialization format (for self-consumption). Lossless. [DEFAULT]"
        (set! out-format 'serial)]
       [("-t" "--table")
@@ -456,25 +456,32 @@
        (set! out-dst (cons 'file file-path))]
 
       ; Input sources (files|directories to read|search, depending on input actions):
-      #:args paths
-      (invariant-assertion (listof path-string?) paths)
+      #:args input-paths
+      (invariant-assertion (listof path-string?) input-paths)
       (invariant-assertion out-format?  out-format)
       (invariant-assertion data-source? data-source)
       (invariant-assertion (set/c (-> Repo? boolean?) #:kind 'mutable) out-filters)
       ; TODO Make sure all other option containers are asserted!
 
-      (define input
+      (define/contract input
+        (-> (listof Repo?))
         (match data-source
           ['search (λ () (find-git-repos (gethostname)
-                                         paths
+                                         input-paths
                                          (set->list exclude-prefix)
                                          (set->list exclude-regexp)))]
-          ['read-table (λ () (input-table paths))]
-          ['read-serial
+          ['read
            (λ ()
-              (append* (map (λ (p)
-                               (with-input-from-file p (λ () (deserialize (read)))))
-                            paths)))]))
+              (if (empty? input-paths)
+                  (deserialize (read))
+                  (append* (map (λ (p)
+                                   (with-input-from-file p (λ () (deserialize (read)))))
+                                input-paths))))]
+          ['read-table
+           (λ ()
+              (if (empty? input-paths)
+                  (raise "Reading table from stdin is not currently implemented.") ; TODO
+                  (input-table input-paths)))]))
 
       (define output
         (case out-format
@@ -501,7 +508,7 @@
                (match data-source
                  ['search
                   "Found"]
-                 [(or 'read-table 'read-serial)
+                 [(or 'read 'read-table)
                   "Read"])
                (length repos)
                (length (uniq (append* (map Repo-locals repos))))
