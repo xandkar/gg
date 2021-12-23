@@ -392,6 +392,11 @@
     (command-line
       #:program (find-system-path 'run-file)
 
+      ; TODO serialization format as default input format
+      ; TODO read by default (instead of search)
+      ; TODO stdin is default if no input file paths provided
+      ; TODO make this work: git-locate --search ~ | git-locate --graph | neato | feh
+
       ; Input actions:
       #:once-any
       [("--search")
