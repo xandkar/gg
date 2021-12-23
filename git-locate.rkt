@@ -438,13 +438,13 @@
       ; Output format:
       #:once-any
       [("-s" "--serialize")
-       "Output in Racket serialization format (for self-consumption). [DEFAULT]"
+       "Output in Racket serialization format (for self-consumption). Lossless. [DEFAULT]"
        (set! out-format 'serial)]
       [("-t" "--table")
-       "Output in a tabular text format (for Unix tools consumption)."
+       "Output in a tabular text format (for Unix tools consumption). Lossy."
        (set! out-format 'table)]
       [("-g" "--graph")
-       "Output in DOT language (for Graphviz)."
+       "Output in DOT language (for Graphviz). Lossy."
        (set! out-format 'graph)]
       ; TODO --html
 
