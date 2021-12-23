@@ -366,7 +366,7 @@
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
     (command-line
-      #:program "git-finder"
+      #:program (find-system-path 'run-file)
 
       #:once-any
       [("-s" "--data-search")
