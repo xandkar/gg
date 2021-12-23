@@ -3,39 +3,53 @@
 #lang racket
 
 (require racket/os
+         racket/serialize
          xml)
 
 (module+ test
   (require rackunit))
 
-(define-struct/contract Remote
-  ; TODO Check if addr is actually a local path and mark:
-  ;      - whether it exists
-  ;      - whether it is _a_ git repo at all
-  ;        - whether it _the_ correct git repo (shares root)
-  ; TODO Maybe optionally check the actual remote addresses as well.
-  ; TODO Mark the above ^^^ stuff in this struct or some table?
-  ([name string?]
-   [addr string?])
-  #:transparent)
+; TODO define-serializable-struct/contract
 
-(define-struct/contract Local
-  ([hostname string?]
-   [path path-string?]
-   [description (or/c #f string?)]
-   [remotes (listof Remote?)])
+; TODO Check if addr is actually a local path and mark:
+;      - whether it exists
+;      - whether it is _a_ git repo at all
+;        - whether it _the_ correct git repo (shares root)
+; TODO Maybe optionally check the actual remote addresses as well.
+; TODO Mark the above ^^^ stuff in this struct or some table?
+
+(define-serializable-struct Remote
+  (name addr)
   #:transparent)
+(set! Remote?
+      (struct/dc Remote
+                 [name string?]
+                 [addr string?]))
+
+(define-serializable-struct Local
+  (hostname path description remotes)
+  #:transparent)
+(set! Local?
+      (struct/dc Local
+                 [hostname    string?]
+                 [path        path-string?]
+                 [description (or/c #f string?)]
+                 [remotes     (listof Remote?)]))
 
 ;; TODO locals should be a custom set keyed on hostname+path
 (define locals? (listof Local?))
 
-(define-struct/contract Repo
-  ([root string?]
-   [locals locals?])
+(define-serializable-struct Repo
+  (root locals)
   #:transparent)
+(set! Repo?
+      (struct/dc Repo
+                 [root   string?]
+                 [locals locals?]))
 
-(define out-format? (or/c 'table 'graph))
-(define data-source? (or/c 'search 'read))
+(define out-format? (or/c 'table 'graph 'serial))
+(define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
+(define data-source? (or/c 'search 'read-table 'read-serial))
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
@@ -365,29 +379,27 @@
   ; - TODO "collect" data for current host
   ; - TODO "integrate" data from per-host data files into a graphviz file
 
-  (let ([out-format 'table]
-        [data-source 'search]
+  (let ([out-format     'table]
+        [out-dst        'stdout]
+        [data-source    'search]
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
     (command-line
       #:program (find-system-path 'run-file)
 
+      ; Input actions:
       #:once-any
-      [("-s" "--data-search")
-       "Discover data from a filesystem search in the given paths. [DEFAULT]"
+      [("--search")
+       "Data discovered via a filesystem search in the given paths. [DEFAULT]"
        (set! data-source 'search)]
-      [("-f" "--data-file")
-       "Read data from the given table files (from previous searches)."
-       (set! data-source 'read)]
+      [("--read-from-table")
+       "Data read from the given table files (from previous searches)."
+       (set! data-source 'read-table)]
+      [("-d" "--read-from-serialized")
+       "Data read from the given serialization files (from previous searches)."
+       (set! data-source 'read-serial)]
 
-      #:once-any
-      [("-t" "--table")
-       "All found repos in a tabular text format. [DEFAULT]"
-       (set! out-format 'table)]
-      [("-g" "--graph-dupes")
-       "Multi-homed repos in DOT language for Graphviz."
-       (set! out-format 'graph)]
-
+      ; Input filters:
       #:multi
       [("-e" "--exclude-prefix")
        directory "Directory subtree prefix to exclude the found candidate paths."
@@ -398,31 +410,79 @@
        (let ([px (pregexp perl-like-regexp (λ (err-msg) err-msg))])
          (invariant-assertion pregexp? px)
          (set-add! exclude-regexp px))]
+      ; TODO --exclude-file which contains all the exclusions:
+      ;     # comment
+      ;     p <prefix>
+      ;     x <regexp>
 
+      ; TODO Output filters:
+      ;      - orphans (no remotes)
+      ;      - local forks (multple local dir)
+      ;      - What else?
+
+      ; Output format:
+      #:once-any
+      [("-s" "--serialize")
+       "Output ALL repos in Racket serialization format for self-consumption."
+       (set! out-format 'serial)]
+      [("-t" "--table")
+       "Output ALL repos in a tabular text format for Unix tools consumption. [DEFAULT]"
+       (set! out-format 'table)]
+      ; TODO Remove multi-home requirement after output filters are implemented.
+      [("-g" "--graph")
+       "Output ONLY MULTI-HOMED repos in DOT language for Graphviz."
+       (set! out-format 'graph)]
+      ; TODO --html
+
+      ; Output destination:
+      #:once-each
+      [("-o" "--output-file")
+       file-path "Output to file. If not provided, output to stdout."
+       (invariant-assertion path-string? file-path)
+       (set! out-dst (cons 'file file-path))]
+
+      ; Input sources (files|directories to read|search, depending on input actions):
       #:args paths
       (invariant-assertion (listof path-string?) paths)
       (invariant-assertion out-format?  out-format)
       (invariant-assertion data-source? data-source)
 
       (define input
-        (case data-source
-          [(search) (λ () (find-git-repos (gethostname)
-                                          paths
-                                          (set->list exclude-prefix)
-                                          (set->list exclude-regexp)))]
-          [(read) (λ () (input-table paths))]))
+        (match data-source
+          ['search (λ () (find-git-repos (gethostname)
+                                         paths
+                                         (set->list exclude-prefix)
+                                         (set->list exclude-regexp)))]
+          ['read-table (λ () (input-table paths))]
+          ['read-serial
+           (λ ()
+              (append* (map (λ (p)
+                               (with-input-from-file p (λ () (deserialize (read)))))
+                            paths)))]))
 
       (define output
         (case out-format
+          [(serial) (λ (repos) (write (serialize repos)))]
           [(table) output-table]
           [(graph) output-graph]))
 
       (define t0 (current-inexact-milliseconds))
       (define repos (input))
       (define t1 (current-inexact-milliseconds))
-      (output repos)
-      (eprintf "Found ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
+      (match out-dst
+        ['stdout (output repos)]
+        [(cons 'file file-path)
+         (with-output-to-file file-path
+                              (λ () (output repos))
+                              #:exists 'replace)])
+      (eprintf "~a ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
+               (match data-source
+                 ['search
+                  "Found"]
+                 [(or 'read-table 'read-serial)
+                  "Read"])
                (length repos)
                (length (uniq (append* (map Repo-locals repos))))
-               (length (uniq (flatten (map (λ (locals) (map Local-remotes locals)) (map Repo-locals repos)))))
+               (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
+                                           (map Repo-locals repos)))))
                (real->decimal-string (/ (- t1 t0) 1000) 3)))))
