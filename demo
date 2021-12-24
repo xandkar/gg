@@ -6,15 +6,23 @@ case "$search_paths" in
     '') search_paths=..;; # XXX Assuming we're located somewhere with other repos
 esac
 
-DATA_DIR=data
+DATA_DIR="$(realpath data)"
 
-prefix="$DATA_DIR"/repos."$(hostname)"."$(date +'%Y-%m-%d--%H:%M:%S%z')"
-data_file="$prefix".rktd
-graph_file="$prefix".dot
-image_file="$prefix".png
+timestamp="$(date +'%Y-%m-%d--%H:%M:%S%z')"
+prefix_0="$DATA_DIR"/repos."$(hostname)"
+prefix_real="$prefix_0"."$timestamp"
+prefix_link="$prefix_0".latest
+
+data_file="$prefix_real".rktd
+graph_file="$prefix_real".dot
+image_file="$prefix_real".png
 
 mkdir -p "$DATA_DIR"
+for suffix in rktd dot png; do
+    ln -sf "$prefix_real"."$suffix" "$prefix_link"."$suffix"
+done
 
-./git-locate --search $search_paths | ./git-locate --read --graph --multi-homed -o "$graph_file" && \
-neato -Tpng -Goverlap=false -o "$image_file" "$graph_file" && \
+./git-locate --search -o "$data_file" $search_paths
+./git-locate --read --graph --multi-homed -o "$graph_file" "$data_file"
+neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"
 sxiv "$image_file"
