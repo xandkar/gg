@@ -9,7 +9,8 @@
 (module+ test
   (require rackunit))
 
-; TODO define-serializable-struct/contract
+; TODO serializable-struct/contract
+; TODO serializable-struct/versions/contract
 
 ; TODO Check if addr is actually a local path and mark:
 ;      - whether it exists
@@ -19,17 +20,13 @@
 ; TODO Check remote status with: git ls-remote --heads <remote-name>
 ; TODO Mark the above ^^^ stuff in this struct or some table?
 
-(define-serializable-struct Remote
-  (name addr)
-  #:transparent)
+(serializable-struct Remote (name addr) #:transparent)
 (set! Remote?
       (struct/dc Remote
                  [name string?]
                  [addr string?]))
 
-(define-serializable-struct Local
-  (hostname path description remotes)
-  #:transparent)
+(serializable-struct Local (hostname path description remotes) #:transparent)
 (set! Local?
       (struct/dc Local
                  [hostname    string?]
@@ -40,9 +37,7 @@
 ;; TODO locals should be a custom set keyed on hostname+path
 (define locals? (listof Local?))
 
-(define-serializable-struct Repo
-  (root locals)
-  #:transparent)
+(serializable-struct Repo (root locals) #:transparent)
 (set! Repo?
       (struct/dc Repo
                  [root   string?]
