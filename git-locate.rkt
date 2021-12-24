@@ -16,6 +16,7 @@
 ;      - whether it is _a_ git repo at all
 ;        - whether it _the_ correct git repo (shares root)
 ; TODO Maybe optionally check the actual remote addresses as well.
+; TODO Check remote status with: git ls-remote --heads <remote-name>
 ; TODO Mark the above ^^^ stuff in this struct or some table?
 
 (define-serializable-struct Remote
@@ -80,15 +81,15 @@
           (Remote name addr))
        (exe cmd)))
 
-(define/contract (git-dir->root-digest git-dir-path)
+(define/contract (git-dir->root git-dir-path)
   (-> path-string? (or/c #f string?))
   ; TODO Replace piping to unix filters with Racket-written filters.
   (define cmd
     (string-append
-      "git --git-dir=" git-dir-path " log --pretty=oneline --reverse | head -1 | awk '{print $1}'"))
+      "git --git-dir=" git-dir-path " rev-list --reverse HEAD | head -1"))
   (match (exe cmd)
     ['() #f]
-    [(list digest) digest]
+    [(list root) root]
     [_ (assert-unreachable)]))
 
 (define/contract (find-git-dirs search-paths)
@@ -131,7 +132,7 @@
        (group-by first
                  (foldl (λ (dir repos)
                            ; TODO git lookups can be done concurrently
-                           (match (git-dir->root-digest dir)
+                           (match (git-dir->root dir)
                              [#f repos]
                              [root
                                (define remotes (git-dir->remotes dir))
