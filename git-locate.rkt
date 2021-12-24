@@ -50,7 +50,12 @@
 
 (define out-format? (or/c 'table 'graph 'serial))
 (define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
-(define data-source? (or/c 'search 'read 'read-table))
+
+(struct/contract Search
+                 ([exclude-prefix (listof path-string?)]
+                  [exclude-regexp (listof pregexp?)]))
+
+(define data-source? (or/c Search? 'read 'read-table))
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
@@ -379,6 +384,56 @@
 
   (displayln "}"))
 
+(define/contract (input data-source input-paths)
+  (-> data-source? (listof path-string?) (listof Repo?))
+  (match data-source
+    [(Search exclude-prefix exclude-regexp)
+     (find-git-repos (gethostname) input-paths exclude-prefix exclude-regexp)]
+    ['read
+     (if (empty? input-paths)
+         (deserialize (read))
+         (append* (map (λ (p)
+                          (with-input-from-file p (λ () (deserialize (read)))))
+                       input-paths)))]
+    ['read-table
+     (if (empty? input-paths)
+         (raise "Reading table from stdin is not currently implemented.") ; TODO
+         (input-table input-paths))]))
+
+(define/contract (output out-format repos)
+  (-> out-format? (listof Repo?) void?)
+  (match out-format
+    ['serial (write (serialize repos))]
+    ['table (output-table repos)]
+    ['graph (output-graph repos)]))
+
+(define (main data-source input-paths out-filters out-format out-dst)
+  (define t0 (current-inexact-milliseconds))
+  ; TODO Time filters separately from reading input.
+  (define repos
+    (let ([repos (input data-source input-paths)])
+      (match (set->list out-filters)
+        ['() repos]
+        [(and (list* _ _) filters)
+         (filter (λ (r) (andmap (λ (f) (f r)) filters)) repos)])))
+  (define t1 (current-inexact-milliseconds))
+  (match out-dst
+    ['stdout (output out-format repos)]
+    [(cons 'file file-path)
+     (with-output-to-file file-path
+                          (λ () (output out-format repos))
+                          #:exists 'replace)])
+  (eprintf "~a ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
+           (match data-source
+             [(Search _ _) "Found"]
+             [(or 'read 'read-table) "Read"])
+           (length repos)
+           (length (uniq (append* (map Repo-locals repos))))
+           (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
+                                       (map Repo-locals repos)))))
+           (real->decimal-string (/ (- t1 t0) 1000) 3))
+  )
+
 (module+ main
   ; TODO handle sub commands:
   ; - TODO "collect" data for current host
@@ -387,7 +442,7 @@
   (let ([out-format     'serial]
         [out-dst        'stdout]
         [out-filters    (mutable-set)]
-        [data-source    'search]
+        [data-source    (Search '() '())]
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
     (command-line
@@ -404,7 +459,7 @@
       #:once-any
       [("--search")
        "Data discovered via a filesystem search in the given paths. [DEFAULT]"
-       (set! data-source 'search)]
+       (set! data-source (Search '() '()))]
       [("--read")
        "Data read from the given serialization files (from previous searches)."
        (set! data-source 'read)]
@@ -463,56 +518,11 @@
       (invariant-assertion data-source? data-source)
       (invariant-assertion (set/c (-> Repo? boolean?) #:kind 'mutable) out-filters)
       ; TODO Make sure all other option containers are asserted!
+      (match data-source
+        [(Search _ _)
+         (set! data-source (Search (set->list exclude-prefix)
+                                   (set->list exclude-regexp)))]
+        [_
+          (void)])
 
-      (define/contract input
-        (-> (listof Repo?))
-        (match data-source
-          ['search (λ () (find-git-repos (gethostname)
-                                         input-paths
-                                         (set->list exclude-prefix)
-                                         (set->list exclude-regexp)))]
-          ['read
-           (λ ()
-              (if (empty? input-paths)
-                  (deserialize (read))
-                  (append* (map (λ (p)
-                                   (with-input-from-file p (λ () (deserialize (read)))))
-                                input-paths))))]
-          ['read-table
-           (λ ()
-              (if (empty? input-paths)
-                  (raise "Reading table from stdin is not currently implemented.") ; TODO
-                  (input-table input-paths)))]))
-
-      (define output
-        (case out-format
-          [(serial) (λ (repos) (write (serialize repos)))]
-          [(table) output-table]
-          [(graph) output-graph]))
-
-      (define t0 (current-inexact-milliseconds))
-      ; TODO Time filters separately from reading input.
-      (define repos
-        (let ([repos (input)])
-          (match (set->list out-filters)
-            ['() repos]
-            [(and (list* _ _) filters)
-             (filter (λ (r) (andmap (λ (f) (f r)) filters)) repos)])))
-      (define t1 (current-inexact-milliseconds))
-      (match out-dst
-        ['stdout (output repos)]
-        [(cons 'file file-path)
-         (with-output-to-file file-path
-                              (λ () (output repos))
-                              #:exists 'replace)])
-      (eprintf "~a ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
-               (match data-source
-                 ['search
-                  "Found"]
-                 [(or 'read 'read-table)
-                  "Read"])
-               (length repos)
-               (length (uniq (append* (map Repo-locals repos))))
-               (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
-                                           (map Repo-locals repos)))))
-               (real->decimal-string (/ (- t1 t0) 1000) 3)))))
+      (main data-source input-paths out-filters out-format out-dst))))
