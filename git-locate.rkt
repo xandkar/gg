@@ -48,7 +48,7 @@
                  ([exclude-prefix (listof path-string?)]
                   [exclude-regexp (listof pregexp?)]))
 
-(define data-source? (or/c Search? 'read 'read-table))
+(define data-source? (or/c Search? 'merge 'merge-tables))
 
 (define/contract (exe cmd)
   (-> string? (listof string?))
@@ -382,13 +382,13 @@
   (match data-source
     [(Search exclude-prefix exclude-regexp)
      (find-git-repos (gethostname) input-paths exclude-prefix exclude-regexp)]
-    ['read
+    ['merge
      (if (empty? input-paths)
          (deserialize (read))
          (append* (map (λ (p)
                           (with-input-from-file p (λ () (deserialize (read)))))
                        input-paths)))]
-    ['read-table
+    ['merge-tables
      (if (empty? input-paths)
          (raise "Reading table from stdin is not currently implemented.") ; TODO
          (input-table input-paths))]))
@@ -419,7 +419,7 @@
   (eprintf "~a ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
            (match data-source
              [(Search _ _) "Found"]
-             [(or 'read 'read-table) "Read"])
+             [(or 'merge 'merge-tables) "Read"])
            (length repos)
            (length (uniq (append* (map Repo-locals repos))))
            (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
@@ -442,7 +442,7 @@
       #:program (find-system-path 'run-file)
 
       ; TODO serialization format as default input format
-      ; TODO read by default (instead of search)
+      ; TODO merge by default (instead of search)
       ; TODO stdin is default if no input file paths provided
       ; TODO make this work: git-locate --search ~ | git-locate --graph | neato | feh
 
@@ -451,14 +451,14 @@
       ; Input actions:
       #:once-any
       [("--search")
-       "Data discovered via a filesystem search in the given paths. [DEFAULT]"
+       "Find repos on the current machine via a filesystem search in the given paths. [DEFAULT]"
        (set! data-source (Search '() '()))]
-      [("--read")
-       "Data read from the given serialization files (from previous searches)."
-       (set! data-source 'read)]
-      [("--read-table")
-       "Data read from the given table files (from previous searches)."
-       (set! data-source 'read-table)]
+      [("--merge")
+       "Merge serialized search results from previous searches (maybe from multiple machines)."
+       (set! data-source 'merge)]
+      [("--merge-tables")
+       "Merge tabularized search results from previous searches (maybe from multiple machines)."
+       (set! data-source 'merge-tables)]
 
       ; Input filters:
       #:multi
@@ -504,7 +504,7 @@
        (invariant-assertion path-string? file-path)
        (set! out-dst (cons 'file file-path))]
 
-      ; Input sources (files|directories to read|search, depending on input actions):
+      ; Input sources (files|directories to merge|search, depending on input actions):
       #:args input-paths
       (invariant-assertion (listof path-string?) input-paths)
       (invariant-assertion out-format?  out-format)
