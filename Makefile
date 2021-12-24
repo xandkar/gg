@@ -1,4 +1,4 @@
-EXE := git-locate
+EXE := git-locations
 
 $(EXE): $(EXE).rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt

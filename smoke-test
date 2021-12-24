@@ -22,7 +22,7 @@ for suffix in rktd dot png; do
     ln -sf "$prefix_real"."$suffix" "$prefix_link"."$suffix"
 done
 
-./git-locate --search -o "$data_file" $search_paths
-./git-locate --merge --graph --multi-homed -o "$graph_file" "$data_file"
+./git-locations --search -o "$data_file" $search_paths
+./git-locations --merge --graph --multi-homed -o "$graph_file" "$data_file"
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"
 sxiv "$image_file"

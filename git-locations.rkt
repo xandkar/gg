@@ -444,7 +444,7 @@
       ; TODO serialization format as default input format
       ; TODO merge by default (instead of search)
       ; TODO stdin is default if no input file paths provided
-      ; TODO make this work: git-locate --search ~ | git-locate --graph | neato | feh
+      ; TODO make this work: git-locations --search ~ | git-locations --graph | neato | feh
 
       ; TODO overhaul option prefixes: --in-.., --out-.., ...
 

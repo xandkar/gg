@@ -1,7 +1,9 @@
-git-locate
-==========
+git-locations
+=============
 
 A search tool to answer the age-old question: "Where my gits at?"
+
+To discover, catalogue and compare repos across N machines.
 
 * You may have several machines in use at any given time,
   with subsets of all repos sparsely scattered across.
@@ -14,6 +16,7 @@ A search tool to answer the age-old question: "Where my gits at?"
 
 1. Find all the repos and confirm what is a fork of what (sharing an ancestor);
 2. Compare their status to understand what is out of date;
-3. Decide what should be pruned, moved, updated or whatever.
+3. Decide what should be pruned, moved, updated or whatever;
+4. GOTO 1
 
-`git-locate` is mainly motivated by 1, but also aims to be useful for 2.
+`git-locations` is mainly motivated by 1, but also aims to be useful for 2.
