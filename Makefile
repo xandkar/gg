@@ -1,4 +1,4 @@
-EXE := git-locations
+EXE := git-sonar
 
 $(EXE): $(EXE).rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt
