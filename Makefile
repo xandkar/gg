@@ -14,6 +14,10 @@ rebuild:
 test:
 	raco test *.rkt
 
+.PHONY: smoke
+smoke: $(EXE)
+	./smoke-test
+
 .PHONY: clean
 clean:
 	rm -f $(EXE)

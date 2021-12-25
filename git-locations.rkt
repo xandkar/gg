@@ -21,7 +21,7 @@
 (serializable-struct Remote (name addr) #:transparent)
 (set! Remote?
       (struct/dc Remote
-                 [name string?]
+                 [name string?] ; TODO Should be: [names (listof string?)]
                  [addr string?]))
 
 (serializable-struct Local (hostname path description remotes) #:transparent)
@@ -50,8 +50,16 @@
 
 (define data-source? (or/c Search? 'merge 'merge-tables))
 
+(struct Ok (data) #:transparent)
+
+(struct Error (data) #:transparent)
+
+(define (Result/c α β)
+  (or/c (struct/dc Ok [data α])
+        (struct/dc Error [data β])))
+
 (define/contract (exe cmd)
-  (-> string? (listof string?))
+  (-> string? (Result/c (listof string?) integer?))
   ; TODO Switch from (process command ...) to (process* executable args ...)
   (match-define
     (list stdout stdin _pid stderr ctrl)
@@ -61,40 +69,45 @@
   (match (ctrl 'status)
     ['done-ok (void)]
     ['done-error
+     (eprintf "~n")
+     (eprintf "Command failure: ~v~n" cmd)
      (copy-port stderr (current-error-port))
-     (exit 1)])
+     (eprintf "~n")
+     (Error (ctrl 'exit-code))])
   (close-output-port stdin)
   (close-input-port stdout)
   (close-input-port stderr)
-  lines)
+  (Ok lines))
 
-(define/contract (git-dir->remotes git-dir-path)
+(define/contract (git-dir->remotes dir)
   (-> path-string? (listof Remote?))
   ; TODO Replace piping to unix filters with Racket-written filters.
+  ; FIXME Handle N names for 1 address.
   (define cmd
-    (string-append
-      "git --git-dir=" git-dir-path " remote -v | awk '{print $1, $2}' | sort -u"))
-  (map (λ (line)
-          (match-define (list name addr) (string-split line))
-          (Remote name addr))
-       (exe cmd)))
-
-(define/contract (git-dir->root git-dir-path)
-  (-> path-string? (or/c #f string?))
-  ; TODO Replace piping to unix filters with Racket-written filters.
-  (define cmd
-    (string-append
-      "git --git-dir=" git-dir-path " rev-list --reverse HEAD | head -1"))
+    (format "git --git-dir=~v remote -v | awk '{print $1, $2}' | sort -u" dir))
   (match (exe cmd)
-    ['() #f]
-    [(list root) root]
-    [_ (assert-unreachable)]))
+    [(Error _) '()]
+    [(Ok lines)
+     (map (λ (line)
+             (match-define (list name addr) (string-split line))
+             (Remote name addr))
+          lines)]))
+
+(define/contract (git-dir->root dir)
+  (-> path-string? (or/c #f string?))
+  (match (exe (format "git --git-dir=~v rev-list --max-parents=0 HEAD" dir))
+    [(Error _) #f]
+    [(Ok '()) #f]
+    [(Ok (list* root _)) root])) ; FIXME Account for multiple roots!
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path-string?) (listof path-string?))
   (define (find search-path)
     ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
-    (exe (string-append "find " search-path " -type d -name .git")))
+    ; TODO find can take all the search paths at once - pass them here!
+    (match (exe (string-append "find " search-path " -type d -name .git"))
+      [(Error _) '()]
+      [(Ok lines) lines]))
   (append* (map find search-paths)))
 
 (define uniq
