@@ -15,7 +15,7 @@
 ;      - whether it is _a_ git repo at all
 ;        - whether it _the_ correct git repo (shares root)
 ; TODO Maybe optionally check the actual remote addresses as well.
-; TODO Check remote status with: git ls-remote --heads <remote-name>
+; TODO Check remote status with: git ls-remote --heads (<remote-name>|<remote-addr>)
 ; TODO Mark the above ^^^ stuff in this struct or some table?
 
 (serializable-struct Remote (name addr) #:transparent)
