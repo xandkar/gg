@@ -58,19 +58,19 @@
   (or/c (struct/dc Ok [data α])
         (struct/dc Error [data β])))
 
-(define/contract (exe cmd)
-  (-> string? (Result/c (listof string?) integer?))
-  ; TODO Switch from (process command ...) to (process* executable args ...)
+(define/contract (exe program . args)
+  (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
+  (define program-path (find-executable-path program))
   (match-define
     (list stdout stdin _pid stderr ctrl)
-    (process cmd))
+    (apply process* program-path args))
   (define lines (port->lines stdout))
   (ctrl 'wait)
   (match (ctrl 'status)
     ['done-ok (void)]
     ['done-error
      (eprintf "~n")
-     (eprintf "Command failure: ~v~n" cmd)
+     (eprintf "Command failure. program-path:~v args:~v~n" program-path args)
      (copy-port stderr (current-error-port))
      (eprintf "~n")
      (Error (ctrl 'exit-code))])
@@ -81,31 +81,25 @@
 
 (define/contract (git-dir->remotes dir)
   (-> path-string? (listof Remote?))
-  ; TODO Replace piping to unix filters with Racket-written filters.
   ; FIXME Handle N names for 1 address.
-  (define cmd
-    (format "git --git-dir=~v remote -v | awk '{print $1, $2}' | sort -u" dir))
-  (match (exe cmd)
+  (match (exe "git" (format "--git-dir=~a" dir) "remote" "-v")
     [(Error _) '()]
     [(Ok lines)
-     (map (λ (line)
-             (match-define (list name addr) (string-split line))
-             (Remote name addr))
-          lines)]))
+     (uniq (map (λ (line) (apply Remote (take (string-split line) 2))) lines))]))
 
 (define/contract (git-dir->root dir)
   (-> path-string? (or/c #f string?))
-  (match (exe (format "git --git-dir=~v rev-list --max-parents=0 HEAD" dir))
+  (match (exe "git" (format "--git-dir=~a" dir) "rev-list" "--max-parents=0" "HEAD")
     [(Error _) #f]
     [(Ok '()) #f]
-    [(Ok (list* root _)) root])) ; FIXME Account for multiple roots!
+    [(Ok (list* root _)) root])) ; FIXME Refactor for multiple roots!
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path-string?) (listof path-string?))
   (define (find search-path)
     ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
     ; TODO find can take all the search paths at once - pass them here!
-    (match (exe (string-append "find " search-path " -type d -name .git"))
+    (match (exe "find" search-path "-type" "d" "-name" ".git")
       [(Error _) '()]
       [(Ok lines) lines]))
   (append* (map find search-paths)))
