@@ -154,6 +154,12 @@
   (-> Repo? boolean?)
   (> (set-count (Repo-roots repo)) 1))
 
+(define/contract (remoteless? repo)
+  (-> Repo? boolean?)
+  (match (append* (map Local-remotes (Repo-locals repo)))
+    ['() #t]
+    [(list* _) #f]))
+
 (define/contract (output-graph repos)
   (-> (listof Repo?) void?)
   (define all-roots (mutable-set))
@@ -340,6 +346,9 @@
       [("--multi-rooted")
        "Output filter: only repos with multiple roots (merged with other repos)."
        (set-add! out-filters multi-rooted?)]
+      [("--remoteless")
+       "Output filter: only repos without remotes."
+       (set-add! out-filters remoteless?)]
 
       ; Output format:
       #:once-any
