@@ -7,18 +7,13 @@
 ; TODO serializable-struct/contract
 ; TODO serializable-struct/versions/contract
 
-; TODO Check if addr is actually a local path and mark:
-;      - whether it exists
-;      - whether it is _a_ git repo at all
-;        - whether it _the_ correct git repo (shares root)
-; TODO Maybe optionally check the actual remote addresses as well.
-; TODO Check remote status with: git ls-remote --heads (<remote-name>|<remote-addr>)
-; TODO Mark the above ^^^ stuff in this struct or some table?
 
 (serializable-struct Remote (name addr) #:transparent)
+; TODO Check remote status with: git ls-remote --heads (<remote-name>|<remote-addr>)
+; TODO Mark remote status in this struct, timestamped.
 (set! Remote?
       (struct/dc Remote
-                 [name string?] ; TODO Should be: [names (listof string?)]
+                 [name string?] ; TODO Should be: [names (set/c string?)]
                  [addr string?]))
 
 (serializable-struct Local (hostname path description remotes) #:transparent)
@@ -202,6 +197,7 @@
               (λ (rem)
                  (set-add! all-remotes rem)
                  (printf
+                   ; TODO Red edge between a local and an unreachable remote.
                    "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
                    (node-id-local loc)
                    (node-id-remote rem)
@@ -233,7 +229,6 @@
     all-remotes
     (λ (r)
        ; TODO Use shape=folder for scheme-less remotes (i.e. dirs).
-       ; TODO Use fillcolor=red for local references to nonexisting dir.
        (printf
          "~a [label=~a, shape=oval, style=filled, fillcolor=lightblue, fontname=monospace, fontsize=8];~n"
          (node-id-remote r)
@@ -288,8 +283,8 @@
 
 (module+ main
   ; TODO handle sub commands:
-  ; - TODO "collect" data for current host
-  ; - TODO "integrate" data from per-host data files into a graphviz file
+  ; - TODO "search" data for current host.
+  ; - TODO "merge"|"read" data from per-host data files into a graphviz file.
 
   (let ([out-format     'serial]
         [out-dst        'stdout]
@@ -300,11 +295,7 @@
     (command-line
       #:program (find-system-path 'run-file)
 
-      ; TODO serialization format as default input format
-      ; TODO merge by default (instead of search)
       ; TODO stdin is default if no input file paths provided
-      ; TODO make this work: git-sonar --search ~ | git-sonar --graph | neato | feh
-
       ; TODO overhaul option prefixes: --in-.., --out-.., ...
 
       ; Input actions:
