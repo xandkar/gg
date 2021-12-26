@@ -27,10 +27,10 @@
 ;; TODO locals should be a custom set keyed on hostname+path
 (define locals? (listof Local?))
 
-(serializable-struct Repo (root locals) #:transparent)
+(serializable-struct Repo (roots locals) #:transparent)
 (set! Repo?
       (struct/dc Repo
-                 [root   string?]
+                 [roots  (set/c string?)]
                  [locals locals?]))
 
 (define out-format? (or/c 'report-graph 'serial))
@@ -79,12 +79,12 @@
     [(Ok lines)
      (uniq (map (λ (line) (apply Remote (take (string-split line) 2))) lines))]))
 
-(define/contract (git-dir->root dir)
-  (-> path-string? (or/c #f string?))
+(define/contract (git-dir->roots dir)
+  (-> path-string? (or/c #f (listof string?)))
   (match (exe "git" (format "--git-dir=~a" dir) "rev-list" "--max-parents=0" "HEAD")
     [(Error _) #f]
     [(Ok '()) #f]
-    [(Ok (list* root _)) root])) ; FIXME Refactor for multiple roots!
+    [(Ok (and (list* _ _) roots)) roots]))
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path-string?) (listof path-string?))
@@ -113,27 +113,27 @@
 
 (define/contract (find-git-repos hostname search-paths exclude-prefix exclude-regexp)
   (-> string? (listof path-string?) (listof path-string?) (listof pregexp?) (listof Repo?))
-  ; All roots are the same in a group, so root of first repo is as good as any:
-  (define (group->root group) (first (first group)))
+  ; All root sets are the same in a group, so roots of the first repo is as good as any:
+  (define (group->roots group) (first (first group)))
   (define (group->local-dirs group) (map second group))
   (define (group->remotes group) (uniq (append* (map third group))))
   (map (λ (group)
-          (define root (group->root group))
+          (define roots (group->roots group))
           (define locals
             (map (λ (local-dir)
                     (define description (local-dir->description local-dir))
                     (define remotes (group->remotes group))
                     (Local hostname local-dir description remotes))
                  (group->local-dirs group)))
-          (Repo root locals))
+          (Repo roots locals))
        (group-by first
                  (foldl (λ (dir repos)
                            ; TODO git lookups can be done concurrently
-                           (match (git-dir->root dir)
+                           (match (git-dir->roots dir)
                              [#f repos]
-                             [root
+                             [roots
                                (define remotes (git-dir->remotes dir))
-                               (define repo (list root dir remotes))
+                               (define repo (list (list->set roots) dir remotes))
                                (cons repo repos)]))
                         '()
                         (filter
@@ -144,12 +144,15 @@
                                               exclude-regexp))))
                           (find-git-dirs search-paths))))))
 
-;; At least 2 locals.
 (define/contract (multi-homed? repo)
   (-> Repo? boolean?)
   (match (Repo-locals repo)
     [(list* _ _ _) #t]
     [(list* _) #f]))
+
+(define/contract (multi-rooted? repo)
+  (-> Repo? boolean?)
+  (> (set-count (Repo-roots repo)) 1))
 
 (define/contract (output-graph repos)
   (-> (listof Repo?) void?)
@@ -186,13 +189,16 @@
     (λ (repo)
        (for-each
          (λ (loc)
-            (set-add! all-roots (Repo-root repo))
+            (set-for-each
+              (Repo-roots repo)
+              (λ (root)
+                 (printf
+                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
+                   (node-id-root root)
+                   (node-id-local loc)
+                   (edge-label-root2local root loc))
+                 (set-add! all-roots root)))
             (set-add! all-locals loc)
-            (printf
-              "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
-              (node-id-root (Repo-root repo))
-              (node-id-local loc)
-              (edge-label-root2local (Repo-root repo) loc))
             (for-each
               (λ (rem)
                  (set-add! all-remotes rem)
@@ -270,11 +276,12 @@
      (with-output-to-file file-path
                           (λ () (output out-format repos))
                           #:exists 'replace)])
-  (eprintf "~a ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
+  (eprintf "~a ~a repos, ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
            (match data-source
              [(Search _ _) "Found"]
              [(or 'merge) "Read"])
            (length repos)
+           (length (append* (map (compose set->list Repo-roots) repos)))
            (length (uniq (append* (map Repo-locals repos))))
            (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
                                        (map Repo-locals repos)))))
@@ -330,6 +337,9 @@
       [("--multi-homed")
        "Output filter: only repos with multiple local directories (local forks)."
        (set-add! out-filters multi-homed?)]
+      [("--multi-rooted")
+       "Output filter: only repos with multiple roots (merged with other repos)."
+       (set-add! out-filters multi-rooted?)]
 
       ; Output format:
       #:once-any

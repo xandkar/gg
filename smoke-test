@@ -23,6 +23,6 @@ for suffix in rktd dot png; do
 done
 
 ./git-sonar --search -o "$data_file" $search_paths
-./git-sonar --merge --report-graph --multi-homed -o "$graph_file" "$data_file"
+./git-sonar --merge --report-graph -o "$graph_file" "$data_file"
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"
 sxiv "$image_file"
