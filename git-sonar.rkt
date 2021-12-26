@@ -33,7 +33,7 @@
                  [roots  (set/c string?)]
                  [locals locals?]))
 
-(define out-format? (or/c 'report-graph 'serial))
+(define out-format? (or/c 'serial 'report-graph 'report-html))
 (define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
 
 (struct/contract Search
@@ -248,6 +248,60 @@
 
   (displayln "}"))
 
+(define/contract (output-html repos)
+  (-> (listof Repo?) void?)
+  (define (remotes-table remotes)
+    (if (empty? remotes)
+        '()
+        (list* 'table '([bgcolor "lightblue"]
+                        [border      "0"]
+                        [cellborder  "0"]
+                        [cellspacing "5"]
+                        [cellpadding "5"])
+               '(tr
+                 (th "name")
+                 (th "addr"))
+               (map (λ (rem)
+                       `(tr
+                         (td ,(Remote-name rem))
+                         (td ,(Remote-addr rem))))
+                    remotes))))
+  (define (local->row loc)
+    `(tr
+      (td ,(Local-hostname loc))
+      (td ,(Local-path loc))
+      (td ,(remotes-table (Local-remotes loc)))))
+  (define (locals-table locals)
+    (list* 'table '([border      "0"]
+                    [cellborder  "0"]
+                    [cellspacing "5"]
+                    [cellpadding "5"])
+           '(tr
+             (th "host")
+             (th "path")
+             (th "remotes"))
+           (map local->row locals)))
+  (define (roots-list roots)
+    (list* 'ul (map (λ (r) `(li ,r)) roots)))
+  (define (repo->row r)
+    `(tr
+      (td ([bgcolor "yellowgreen"]) ,(roots-list (set->list (Repo-roots r))))
+      (td ([bgcolor "wheat"]) ,(locals-table (Repo-locals r)))))
+  (define repos-table
+    (list* 'table '([border      "0"]
+                    [cellborder  "0"]
+                    [cellspacing "5"]
+                    [cellpadding "0"])
+           '(tr
+             (th ([align "left"]) "roots")
+             (th ([align "left"]) "locals"))
+           (map repo->row repos)))
+  (displayln (xexpr->string `(html
+                              (head)
+                              (body
+                                ([style "font-family:mono"])
+                                ,repos-table)))))
+
 (define/contract (input data-source input-paths)
   (-> data-source? (listof path-string?) (listof Repo?))
   (match data-source
@@ -264,6 +318,7 @@
   (-> out-format? (listof Repo?) void?)
   (match out-format
     ['serial (write (serialize repos))]
+    ['report-html (output-html repos)]
     ['report-graph (output-graph repos)]))
 
 (define (main data-source input-paths out-filters out-format out-dst)
@@ -358,6 +413,9 @@
       [("-g" "--report-graph")
        "Output a report in DOT language (for Graphviz). Lossy."
        (set! out-format 'report-graph)]
+      [("--report-html")
+       "Output a report in HTML."
+       (set! out-format 'report-html)]
       ; TODO --report-html
 
       ; Output destination:

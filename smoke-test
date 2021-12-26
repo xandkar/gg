@@ -16,13 +16,15 @@ prefix_link="$prefix_0".latest
 data_file="$prefix_real".rktd
 graph_file="$prefix_real".dot
 image_file="$prefix_real".png
+html_file="$prefix_real".html
 
 mkdir -p "$DATA_DIR"
-for suffix in rktd dot png; do
+for suffix in rktd dot png html; do
     ln -sf "$prefix_real"."$suffix" "$prefix_link"."$suffix"
 done
 
 ./git-sonar --search -o "$data_file" $search_paths
+./git-sonar --merge --report-html -o "$html_file" "$data_file"
 ./git-sonar --merge --report-graph -o "$graph_file" "$data_file"
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"
 sxiv "$image_file"
