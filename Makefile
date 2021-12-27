@@ -1,4 +1,5 @@
 EXE := git-sonar
+PREFIX := $(HOME)
 
 $(EXE): $(EXE).rkt
 	raco exe --orig-exe -o $@ $(EXE).rkt
@@ -9,6 +10,11 @@ build: $(EXE)
 .PHONY: rebuild
 rebuild:
 	$(MAKE) --always-make build
+
+.PHONY: install
+install: $(EXE)
+	mkdir -p $(PREFIX)/bin/
+	cp $(EXE) $(PREFIX)/bin/
 
 .PHONY: test
 test:
