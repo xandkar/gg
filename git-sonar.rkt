@@ -34,9 +34,12 @@
                  [roots  (set/c string?)]
                  [locals locals?]))
 
+(struct/contract Ignore
+                 ([prefix (set/c path-string?)]
+                  [regexp (set/c pregexp?)]))
+
 (struct/contract Search
-                 ([exclude-prefix (listof path-string?)]
-                  [exclude-regexp (listof pregexp?)]))
+                 ([ignore Ignore?]))
 
 (struct/contract DirTree
                  ([root path-string?]))
@@ -52,6 +55,9 @@
 (define (Result/c α β)
   (or/c (struct/dc Ok [data α])
         (struct/dc Error [data β])))
+
+(define current-ignore-file
+  (make-parameter (build-path (current-directory) ".git-sonar-ignore")))
 
 (define/contract (exe program . args)
   (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
@@ -121,8 +127,8 @@
              line)])
       #f))
 
-(define/contract (find-git-repos hostname search-paths exclude-prefix exclude-regexp)
-  (-> string? (listof path-string?) (listof path-string?) (listof pregexp?) (listof Repo?))
+(define/contract (find-git-repos hostname search-paths ignore)
+  (-> string? (listof path-string?) Ignore? (listof Repo?))
   ; All root sets are the same in a group, so roots of the first repo is as good as any:
   (define (group->roots group) (first (first group)))
   (define (group->local-dirs group) (map second group))
@@ -156,9 +162,9 @@
                         (filter
                           (λ (path)
                              (and (not (ormap (curry string-prefix? path)
-                                              exclude-prefix))
+                                              (set->list (Ignore-prefix ignore))))
                                   (not (ormap (λ (px) (regexp-match? px path))
-                                              exclude-regexp))))
+                                              (set->list (Ignore-regexp ignore))))))
                           (find-git-dirs search-paths))))))
 
 (define/contract (multi-homed? repo)
@@ -176,6 +182,40 @@
   (match (append* (map Local-remotes (Repo-locals repo)))
     ['() #t]
     [(list* _) #f]))
+
+(define/contract (ignore-union i1 i2)
+  (-> Ignore? Ignore? Ignore?)
+  (Ignore (set-union (Ignore-prefix i1)
+                     (Ignore-prefix i2))
+          (set-union (Ignore-regexp i1)
+                     (Ignore-regexp i2))))
+
+(define/contract (file->ignore path)
+  (-> path-string? Ignore?)
+  ; # comment
+  ; p <prefix>
+  ; x <regexp>
+  (foldl (λ (line i)
+            (define len (string-length line))
+            (cond
+              ; empty
+              [(= len 0) i]
+              ; comment
+              [(and (> len 0) (equal? #\# (string-ref line 0))) i]
+              ; prefix
+              [(and (> len 2)
+                    (path-string? (substring line 2 len)))
+               (struct-copy Ignore i [prefix (set-add (Ignore-prefix i) (substring line 2 len))])]
+              ; regexp
+              [(and (> len 2)
+                    (pregexp? (pregexp (substring line 2 len) (λ (err-msg) err-msg))))
+               (struct-copy Ignore i [regexp (set-add (Ignore-regexp i) (substring line 2 len))])]
+              ; invalid
+              [else
+                (eprintf "WARNING: skipping an invalid line in ignore file: ~v~n" line)
+                i]))
+         (Ignore (set) (set))
+         (file->lines path)))
 
 (define/contract (output-graph repos)
   (-> (listof Repo?) void?)
@@ -356,8 +396,8 @@
 (define/contract (input data-source input-paths)
   (-> data-source? (listof path-string?) (listof Repo?))
   (match data-source
-    [(Search exclude-prefix exclude-regexp)
-     (find-git-repos (gethostname) input-paths exclude-prefix exclude-regexp)]
+    [(Search ignore)
+     (find-git-repos (gethostname) input-paths ignore)]
     ['merge
      (if (empty? input-paths)
          (deserialize (read))
@@ -391,7 +431,7 @@
                           #:exists 'replace)])
   (eprintf "~a ~a repos, ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
            (match data-source
-             [(Search _ _) "Found"]
+             [(Search _) "Found"]
              [(or 'merge) "Read"])
            (length repos)
            (length (append* (map (compose set->list Repo-roots) repos)))
@@ -409,7 +449,7 @@
   (let ([out-format     'serial]
         [out-dst        'stdout]
         [out-filters    (mutable-set)]
-        [data-source    (Search '() '())]
+        [data-source    (Search (Ignore (set) (set)))]
         [exclude-prefix (mutable-set)]
         [exclude-regexp (mutable-set)])
     (command-line
@@ -422,13 +462,18 @@
       #:once-any
       [("--search")
        "Find repos on the current machine via a filesystem search in the given paths. [DEFAULT]"
-       (set! data-source (Search '() '()))]
+       (set! data-source (Search (Ignore (set) (set))))]
       [("--merge")
        "Merge serialized search results from previous searches (maybe from multiple machines)."
        (set! data-source 'merge)]
 
       ; Input filters:
       #:multi
+      [("-i" "--ignore-file")
+       ignore-file "Input filters file. Default: $PWD/.git-sonar-ignore"
+       (invariant-assertion path-string? ignore-file)
+       (invariant-assertion file-exists? ignore-file)
+       (current-ignore-file ignore-file)]
       [("-e" "--exclude-prefix")
        directory "Input filter: directory subtree prefix to exclude from the found candidate paths."
        (invariant-assertion path-string? directory)
@@ -438,10 +483,6 @@
        (let ([px (pregexp perl-like-regexp (λ (err-msg) err-msg))])
          (invariant-assertion pregexp? px)
          (set-add! exclude-regexp px))]
-      ; TODO --exclude-file which contains all the exclusions:
-      ;     # comment
-      ;     p <prefix>
-      ;     x <regexp>
 
       ; Output filters:
       #:once-each
@@ -473,7 +514,6 @@
       [("--report-html")
        "Output a report in HTML."
        (set! out-format 'report-html)]
-      ; TODO --report-html
 
       ; Output destination:
       #:once-each
@@ -490,9 +530,13 @@
       (invariant-assertion (set/c (-> Repo? boolean?) #:kind 'mutable) out-filters)
       ; TODO Make sure all other option containers are asserted!
       (match data-source
-        [(Search _ _)
-         (set! data-source (Search (set->list exclude-prefix)
-                                   (set->list exclude-regexp)))]
+        [(Search _)
+         (let ([from-cli (Ignore (list->set (set->list exclude-prefix))
+                                 (list->set (set->list exclude-regexp)))]
+               [from-file (if (file-exists? (current-ignore-file))
+                              (file->ignore (current-ignore-file))
+                              (Ignore (set) (set)))])
+           (set! data-source (Search (ignore-union from-cli from-file))))]
         [_
           (void)])
       (let ([input-paths (map (compose path->string normalize-path) input-paths)])
