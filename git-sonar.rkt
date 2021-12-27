@@ -7,7 +7,6 @@
 ; TODO serializable-struct/contract
 ; TODO serializable-struct/versions/contract
 
-
 (serializable-struct Remote (name addr) #:transparent)
 ; TODO Check remote status with: git ls-remote --heads (<remote-name>|<remote-addr>)
 ; TODO Mark remote status in this struct, timestamped.
@@ -16,11 +15,13 @@
                  [name string?] ; TODO Should be: [names (set/c string?)]
                  [addr string?]))
 
-(serializable-struct Local (hostname path description remotes) #:transparent)
+(serializable-struct Local (hostname path bare? description remotes) #:transparent)
 (set! Local?
       (struct/dc Local
                  [hostname    string?]
-                 [path        path-string?]
+                 ; TODO Switch from path-string? to path? everywhere.
+                 [path        (and/c path-string? absolute-path?)]
+                 [bare?       boolean?]
                  [description (or/c #f string?)]
                  [remotes     (listof Remote?)]))
 
@@ -33,13 +34,15 @@
                  [roots  (set/c string?)]
                  [locals locals?]))
 
-(define out-format? (or/c 'serial 'report-graph 'report-html))
-(define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
-
 (struct/contract Search
                  ([exclude-prefix (listof path-string?)]
                   [exclude-regexp (listof pregexp?)]))
 
+(struct/contract DirTree
+                 ([root path-string?]))
+
+(define out-format? (or/c 'serial DirTree? 'report-graph 'report-html))
+(define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
 (define data-source? (or/c Search? 'merge))
 
 (struct Ok (data) #:transparent)
@@ -78,6 +81,13 @@
     [(Error _) '()]
     [(Ok lines)
      (uniq (map (λ (line) (apply Remote (take (string-split line) 2))) lines))]))
+
+(define/contract (git-dir->bare? dir)
+  (-> path-string? (Result/c boolean? integer?))
+  (match (exe "git" (format "--git-dir=~a" dir) "rev-parse" "--is-bare-repository")
+    [(and (Error _) e) e]
+    [(Ok (list* "true" _)) (Ok #t)]
+    [(Ok (list* "false" _)) (Ok #f)]))
 
 (define/contract (git-dir->roots dir)
   (-> path-string? (or/c #f (listof string?)))
@@ -123,7 +133,14 @@
             (map (λ (local-dir)
                     (define description (local-dir->description local-dir))
                     (define remotes (group->remotes group))
-                    (Local hostname local-dir description remotes))
+                    (define bare?-result (git-dir->bare? local-dir))
+                    ; XXX Assuming we already know local-dir is a valid repo:
+                    (invariant-assertion Ok? bare?-result)
+                    (Local hostname
+                           local-dir
+                           (Ok-data bare?-result)
+                           description
+                           remotes))
                  (group->local-dirs group)))
           (Repo roots locals))
        (group-by first
@@ -302,6 +319,40 @@
                                 ([style "font-family:mono"])
                                 ,repos-table)))))
 
+(define/contract (output-dir-tree repos rooted-in)
+  (-> (listof Repo?) path-string? void?)
+  (for-each
+    (λ (rep)
+       (for-each
+         (λ (loc)
+            (define local-path
+              ; XXX Use work tree for non-bares. TODO Consider optionalizing.
+              (if (Local-bare? loc)
+                  (Local-path loc)
+                  (match-let-values
+                    ([(work-tree .git trailing-slash?) (split-path (Local-path loc))])
+                    (invariant-assertion absolute-path? work-tree)
+                    (invariant-assertion ".git" (path->string .git))
+                    (invariant-assertion #f trailing-slash?)
+                    work-tree)))
+            (define dir (reroot-path local-path
+                                     (build-path rooted-in (Local-hostname loc))))
+            (define file-roots (build-path dir "roots.txt"))
+            (define file-remotes (build-path dir "remotes.txt"))
+            (make-parent-directory* file-roots)
+            (make-parent-directory* file-remotes)
+            (display-lines-to-file
+              (map (λ (rem) (format "~a ~a" (Remote-name rem) (Remote-addr rem)))
+                   (Local-remotes loc))
+              file-remotes
+              #:exists 'replace)
+            (display-lines-to-file
+              (set->list (Repo-roots rep))
+              file-roots
+              #:exists 'replace))
+         (Repo-locals rep)))
+    repos))
+
 (define/contract (input data-source input-paths)
   (-> data-source? (listof path-string?) (listof Repo?))
   (match data-source
@@ -318,6 +369,7 @@
   (-> out-format? (listof Repo?) void?)
   (match out-format
     ['serial (write (serialize repos))]
+    [(DirTree rooted-in) (output-dir-tree repos rooted-in)]
     ['report-html (output-html repos)]
     ['report-graph (output-graph repos)]))
 
@@ -410,6 +462,11 @@
       [("-s" "--serial")
        "Output serialized results (for subsequent self-consumption). Lossless. [DEFAULT]"
        (set! out-format 'serial)]
+      [("-d" "--dir-tree")
+       rooted-in "Output as a directory tree, rooted in the given directory."
+       (invariant-assertion path-string? rooted-in)
+       (invariant-assertion directory-exists? rooted-in)
+       (set! out-format (DirTree rooted-in))]
       [("-g" "--report-graph")
        "Output a report in DOT language (for Graphviz). Lossy."
        (set! out-format 'report-graph)]
@@ -438,5 +495,10 @@
                                    (set->list exclude-regexp)))]
         [_
           (void)])
-
-      (main data-source input-paths out-filters out-format out-dst))))
+      (let ([input-paths (map (compose path->string normalize-path) input-paths)])
+        (invariant-assertion (listof absolute-path?) input-paths)
+        (main data-source
+              input-paths
+              out-filters
+              out-format
+              out-dst)))))
