@@ -62,6 +62,8 @@ operations:
     3. merge previous and current data
     4. write all to $PWD
 
+Symlink name can initially just be a path with slashes replaced by dahses.
+
 backlog
 -------
 
