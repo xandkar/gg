@@ -1,7 +1,6 @@
 TODO
 ====
 
-- [ ] switch to serializable-struct/versions
 - [ ] figure out an index layout/scheme
     - host
     - root
@@ -69,3 +68,4 @@ backlog
 done
 ----
 - [x] host-specific ignore files
+- [x] switch to serializable-struct/versions

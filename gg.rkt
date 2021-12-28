@@ -7,15 +7,26 @@
 ; TODO serializable-struct/contract
 ; TODO serializable-struct/versions/contract
 
-(serializable-struct Remote (name addr) #:transparent)
-; TODO Check remote status with: git ls-remote --heads (<remote-name>|<remote-addr>)
-; TODO Mark remote status in this struct, timestamped.
+(serializable-struct/versions
+  ; TODO Check and mark remote status. git ls-remote --heads (<remote-name>|<remote-addr>)
+  Remote
+  0
+  (name addr)
+  ()
+  #:transparent)
+
 (set! Remote?
       (struct/dc Remote
                  [name string?] ; TODO Should be: [names (set/c string?)]
                  [addr string?]))
 
-(serializable-struct Local (hostname path bare? description remotes) #:transparent)
+(serializable-struct/versions
+  Local
+  0
+  (hostname path bare? description remotes)
+  ()
+  #:transparent)
+
 (set! Local?
       (struct/dc Local
                  [hostname    string?]
@@ -27,7 +38,13 @@
 ;; TODO locals should be a custom set keyed on hostname+path
 (define locals? (listof Local?))
 
-(serializable-struct Repo (roots locals) #:transparent)
+(serializable-struct/versions
+  Repo
+  0
+  (roots locals)
+  ()
+  #:transparent)
+
 (set! Repo?
       (struct/dc Repo
                  [roots  (set/c string?)]
