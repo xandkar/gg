@@ -1,8 +1,14 @@
-- [x] host-specific ignore files
+TODO
+====
+
+- [ ] switch to serializable-struct/versions
 - [ ] figure out an index layout/scheme
     - host
     - root
     - roots
+
+design
+------
 
 UX:
     initial:
@@ -56,3 +62,10 @@ operations:
         $PWD/data/$host.rktd
     3. merge previous and current data
     4. write all to $PWD
+
+backlog
+-------
+
+done
+----
+- [x] host-specific ignore files
