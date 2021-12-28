@@ -1,0 +1,58 @@
+- [ ] host-specific ignore files
+- [ ] figure out an index layout/scheme
+    - host
+    - root
+    - roots
+
+UX:
+    initial:
+
+        mkdir $path_to_my_git_of_gits_repo
+        cd $path_to_my_git_of_gits_repo
+        git init
+        git commit --allow-empty -m 'Root commit'
+        git add $remote $uri
+        $EDITOR .ignore-$HOST  # add path patterns to ignore ON THIS HOST during filesystem search
+        git add .ignore-$HOST && git commit -m 'Update ignore patterns'
+        gg update
+        git commit -a -m 'Update'
+        git push $remote $branch
+
+    routine:
+
+        cd $path_to_my_git_of_gits_repo
+        git pull --rebase $remote $branch
+        gg update
+        git commit -a -m 'Update'
+        git push $remote $branch
+
+operations:
+- search (the given paths, ignoring the given patterns, then write in the specified format to specified file/dir)
+- read (the given data files)
+- write (the specified format after applying specified filters)
+    - report
+        - dot
+        - html
+    - data
+        - rktd
+    - index
+        - dir tree
+    - all (of the above, to the given directory as the following tree)
+
+        data/$host.rktd
+        reports/graph-per-host.$host.dot
+                list-per-host.$host.html
+                graph-all.dot
+                list-all.html
+                ... and whatever other ideas come-up ...
+        indices/by-host/$host/$path/<repo-state-files>
+                by-root/$root/<symlink-to-by-host-leaf-dir>   # how to name?
+                by-roots/$roots/<symlink-to-by-host-leaf-dir> # how to name?
+- update
+    1. read previous search data
+        $PWD/data/*.rktd
+    2. search for current data from current host
+    3. write current host data to
+        $PWD/data/$host.rktd
+    3. merge previous and current data
+    4. write all to $PWD
