@@ -29,9 +29,9 @@ done
 ./git-sonar --search -o "$data_file" $search_paths
 
 # outs:
-./git-sonar --merge --dir-tree "$dir_tree_dir" "$data_file"
-./git-sonar --merge --report-html -o "$html_file" "$data_file"
-./git-sonar --merge --report-graph -o "$graph_file" "$data_file"
+./git-sonar --read --dir-tree "$dir_tree_dir" "$data_file"
+./git-sonar --read --report-html -o "$html_file" "$data_file"
+./git-sonar --read --report-graph -o "$graph_file" "$data_file"
 
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"
 sxiv "$image_file"

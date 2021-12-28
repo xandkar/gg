@@ -45,7 +45,7 @@
 
 (define out-format? (or/c 'serial DirTree? 'report-graph 'report-html))
 (define out-dst? (or/c (cons/c 'file path?) 'stdout))
-(define data-source? (or/c Search? 'merge))
+(define data-source? (or/c Search? 'read))
 
 (struct Ok (data) #:transparent)
 
@@ -417,7 +417,7 @@
   (match data-source
     [(Search ignore)
      (find-git-repos (gethostname) input-paths ignore)]
-    ['merge
+    ['read
      (if (empty? input-paths)
          (deserialize (read))
          (append* (map (λ (p)
@@ -451,7 +451,7 @@
   (eprintf "~a ~a repos, ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
            (match data-source
              [(Search _) "Found"]
-             [(or 'merge) "Read"])
+             [(or 'read) "Read"])
            (length repos)
            (length (append* (map (compose set->list Repo-roots) repos)))
            (length (uniq (append* (map Repo-locals repos))))
@@ -460,10 +460,7 @@
            (real->decimal-string (/ (- t1 t0) 1000) 3)))
 
 (module+ main
-  ; TODO handle sub commands:
-  ; - TODO "search" data for current host.
-  ; - TODO "merge"|"read" data from per-host data files into a graphviz file.
-
+  ; TODO sub commands?
   (let ([out-format     'serial]
         [out-dst        'stdout]
         [out-filters    (mutable-set)]
@@ -481,9 +478,9 @@
       [("--search")
        "Find repos on the current machine via a filesystem search in the given paths. [DEFAULT]"
        (set! data-source (Search (Ignore (set) (set))))]
-      [("--merge")
+      [("--read")
        "Merge serialized search results from previous searches (maybe from multiple machines)."
-       (set! data-source 'merge)]
+       (set! data-source 'read)]
 
       ; Input filters:
       #:multi
@@ -510,7 +507,7 @@
        "Output filter: only repos with multiple local directories (local forks)."
        (set-add! out-filters multi-homed?)]
       [("--multi-rooted")
-       "Output filter: only repos with multiple roots (merged with other repos)."
+       "Output filter: only repos with multiple roots."
        (set-add! out-filters multi-rooted?)]
       [("--remoteless")
        "Output filter: only repos without remotes."
@@ -540,7 +537,7 @@
        (invariant-assertion path-string? file-path)
        (set! out-dst (cons 'file (normalize-path file-path)))]
 
-      ; Input sources (files|directories to merge|search, depending on input actions):
+      ; Input sources (files|directories to read|search, depending on input actions):
       #:args input-paths
       (invariant-assertion (listof path-string?) input-paths)
       (invariant-assertion out-format?  out-format)
