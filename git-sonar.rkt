@@ -196,27 +196,40 @@
   ; # comment
   ; p <prefix>
   ; x <regexp>
-  (foldl (λ (line i)
+  (foldl (λ (line ignore)
             (define len (string-length line))
             (cond
               ; empty
-              [(= len 0) i]
+              [(= len 0) ignore]
+
               ; comment
-              [(and (> len 0) (equal? #\# (string-ref line 0))) i]
+              [(and (> len 0)
+                    (equal? #\# (string-ref line 0)))
+               ignore]
+
               ; prefix
               [(and (> len 2)
                     (equal? #\p (string-ref line 0))
                     (path-string? (substring line 2 len)))
-               (struct-copy Ignore i [prefix (set-add (Ignore-prefix i) (substring line 2 len))])]
+               ; TODO Expand ~ in prefixes
+               (struct-copy Ignore
+                            ignore
+                            [prefix (set-add (Ignore-prefix ignore)
+                                             (substring line 2 len))])]
+
               ; regexp
               [(and (> len 2)
                     (equal? #\x (string-ref line 0))
-                    (pregexp? (pregexp (substring line 2 len) (λ (err-msg) err-msg))))
-               (struct-copy Ignore i [regexp (set-add (Ignore-regexp i) (pregexp (substring line 2 len)))])]
+                    (pregexp? (pregexp (substring line 2 len) identity)))
+               (struct-copy Ignore
+                            ignore
+                            [regexp (set-add (Ignore-regexp ignore)
+                                             (pregexp (substring line 2 len)))])]
+
               ; invalid
               [else
                 (eprintf "WARNING: skipping an invalid line in ignore file: ~v~n" line)
-                i]))
+                ignore]))
          (Ignore (set) (set))
          (file->lines path)))
 
