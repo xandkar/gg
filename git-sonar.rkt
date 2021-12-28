@@ -19,8 +19,7 @@
 (set! Local?
       (struct/dc Local
                  [hostname    string?]
-                 ; TODO Switch from path-string? to path? everywhere.
-                 [path        (and/c path-string? absolute-path?)]
+                 [path        (and/c path? absolute-path?)]
                  [bare?       boolean?]
                  [description (or/c #f string?)]
                  [remotes     (listof Remote?)]))
@@ -35,17 +34,17 @@
                  [locals locals?]))
 
 (struct/contract Ignore
-                 ([prefix (set/c path-string?)]
+                 ([prefix (set/c path?)]
                   [regexp (set/c pregexp?)]))
 
 (struct/contract Search
                  ([ignore Ignore?]))
 
 (struct/contract DirTree
-                 ([root path-string?]))
+                 ([root path?]))
 
 (define out-format? (or/c 'serial DirTree? 'report-graph 'report-html))
-(define out-dst? (or/c (cons/c 'file path-string?) 'stdout))
+(define out-dst? (or/c (cons/c 'file path?) 'stdout))
 (define data-source? (or/c Search? 'merge))
 
 (struct Ok (data) #:transparent)
@@ -81,42 +80,42 @@
   (Ok lines))
 
 (define/contract (git-dir->remotes dir)
-  (-> path-string? (listof Remote?))
+  (-> path? (listof Remote?))
   ; FIXME Handle N names for 1 address.
-  (match (exe "git" (format "--git-dir=~a" dir) "remote" "-v")
+  (match (exe "git" (format "--git-dir=~a" (path->string dir)) "remote" "-v")
     [(Error _) '()]
     [(Ok lines)
      (uniq (map (λ (line) (apply Remote (take (string-split line) 2))) lines))]))
 
 (define/contract (git-dir->bare? dir)
-  (-> path-string? (Result/c boolean? integer?))
-  (match (exe "git" (format "--git-dir=~a" dir) "rev-parse" "--is-bare-repository")
+  (-> path? (Result/c boolean? integer?))
+  (match (exe "git" (format "--git-dir=~a" (path->string dir)) "rev-parse" "--is-bare-repository")
     [(and (Error _) e) e]
     [(Ok (list* "true" _)) (Ok #t)]
     [(Ok (list* "false" _)) (Ok #f)]))
 
 (define/contract (git-dir->roots dir)
-  (-> path-string? (or/c #f (listof string?)))
-  (match (exe "git" (format "--git-dir=~a" dir) "rev-list" "--max-parents=0" "HEAD")
+  (-> path? (or/c #f (listof string?)))
+  (match (exe "git" (format "--git-dir=~a" (path->string dir)) "rev-list" "--max-parents=0" "HEAD")
     [(Error _) #f]
     [(Ok '()) #f]
     [(Ok (and (list* _ _) roots)) roots]))
 
 (define/contract (find-git-dirs search-paths)
-  (-> (listof path-string?) (listof path-string?))
+  (-> (listof path?) (listof path?))
   (define (find search-path)
     ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
     ; TODO find can take all the search paths at once - pass them here!
-    (match (exe "find" search-path "-type" "d" "-name" ".git")
+    (match (exe "find" (path->string search-path) "-type" "d" "-name" ".git")
       [(Error _) '()]
-      [(Ok lines) lines]))
+      [(Ok lines) (map normalize-path lines)]))
   (append* (map find search-paths)))
 
 (define uniq
   (compose set->list list->set))
 
 (define/contract (local-dir->description path)
-  (-> path-string? (or/c #f string?))
+  (-> path? (or/c #f string?))
   (define path-description (build-path path "description"))
   (if (file-exists? path-description)
       (match (file->lines path-description)
@@ -128,7 +127,7 @@
       #f))
 
 (define/contract (find-git-repos hostname search-paths ignore)
-  (-> string? (listof path-string?) Ignore? (listof Repo?))
+  (-> string? (listof path?) Ignore? (listof Repo?))
   ; All root sets are the same in a group, so roots of the first repo is as good as any:
   (define (group->roots group) (first (first group)))
   (define (group->local-dirs group) (map second group))
@@ -161,9 +160,12 @@
                         '()
                         (filter
                           (λ (path)
-                             (and (not (ormap (curry string-prefix? path)
+                             (define path-str (path->string path))
+                             (and (not (ormap (λ (p)
+                                                 (string-prefix? path-str
+                                                                 (path->string p)))
                                               (set->list (Ignore-prefix ignore))))
-                                  (not (ormap (λ (px) (regexp-match? px path))
+                                  (not (ormap (λ (px) (regexp-match? px path-str))
                                               (set->list (Ignore-regexp ignore))))))
                           (find-git-dirs search-paths))))))
 
@@ -192,7 +194,7 @@
 
 ;; TODO Tests for file->ignore.
 (define/contract (file->ignore path)
-  (-> path-string? Ignore?)
+  (-> path? Ignore?)
   ; # comment
   ; p <prefix>
   ; x <regexp>
@@ -211,11 +213,10 @@
               [(and (> len 2)
                     (equal? #\p (string-ref line 0))
                     (path-string? (substring line 2 len)))
-               ; TODO Expand ~ in prefixes
                (struct-copy Ignore
                             ignore
                             [prefix (set-add (Ignore-prefix ignore)
-                                             (substring line 2 len))])]
+                                             (expand-user-path (substring line 2 len)))])]
 
               ; regexp
               [(and (> len 2)
@@ -251,7 +252,7 @@
   (define (node-label-local l)
     (define hostname (Local-hostname l))
     (define description (let ([d (Local-description l)]) (if d d "")))
-    (define path (Local-path l))
+    (define path (path->string (Local-path l)))
     (format "<~a>"
             (xexpr->string
               `(table
@@ -342,7 +343,7 @@
   (define (local->row loc)
     `(tr
       (td ,(Local-hostname loc))
-      (td ,(Local-path loc))
+      (td ,(path->string (Local-path loc)))
       (td ,(remotes-table (Local-remotes loc)))))
   (define (locals-table locals)
     (list* 'table '([border      "0"]
@@ -376,7 +377,7 @@
                                 ,repos-table)))))
 
 (define/contract (output-dir-tree repos rooted-in)
-  (-> (listof Repo?) path-string? void?)
+  (-> (listof Repo?) path? void?)
   (for-each
     (λ (rep)
        (for-each
@@ -410,7 +411,7 @@
     repos))
 
 (define/contract (input data-source input-paths)
-  (-> data-source? (listof path-string?) (listof Repo?))
+  (-> data-source? (listof path?) (listof Repo?))
   (match data-source
     [(Search ignore)
      (find-git-repos (gethostname) input-paths ignore)]
@@ -454,8 +455,7 @@
            (length (uniq (append* (map Repo-locals repos))))
            (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
                                        (map Repo-locals repos)))))
-           (real->decimal-string (/ (- t1 t0) 1000) 3))
-  )
+           (real->decimal-string (/ (- t1 t0) 1000) 3)))
 
 (module+ main
   ; TODO handle sub commands:
@@ -489,7 +489,7 @@
        ignore-file "Input filters file. Default: $PWD/.git-sonar-ignore"
        (invariant-assertion path-string? ignore-file)
        (invariant-assertion file-exists? ignore-file)
-       (current-ignore-file ignore-file)]
+       (current-ignore-file (normalize-path ignore-file))]
       [("-e" "--exclude-prefix")
        directory "Input filter: directory subtree prefix to exclude from the found candidate paths."
        (invariant-assertion path-string? directory)
@@ -523,7 +523,7 @@
        rooted-in "Output as a directory tree, rooted in the given directory."
        (invariant-assertion path-string? rooted-in)
        (invariant-assertion directory-exists? rooted-in)
-       (set! out-format (DirTree rooted-in))]
+       (set! out-format (DirTree (normalize-path rooted-in)))]
       [("-g" "--report-graph")
        "Output a report in DOT language (for Graphviz). Lossy."
        (set! out-format 'report-graph)]
@@ -536,7 +536,7 @@
       [("-o" "--output-file")
        file-path "Output to file. If not provided, output to stdout."
        (invariant-assertion path-string? file-path)
-       (set! out-dst (cons 'file file-path))]
+       (set! out-dst (cons 'file (normalize-path file-path)))]
 
       ; Input sources (files|directories to merge|search, depending on input actions):
       #:args input-paths
@@ -555,7 +555,7 @@
            (set! data-source (Search (ignore-union from-cli from-file))))]
         [_
           (void)])
-      (let ([input-paths (map (compose path->string normalize-path) input-paths)])
+      (let ([input-paths (map normalize-path input-paths)])
         (invariant-assertion (listof absolute-path?) input-paths)
         (main data-source
               input-paths
