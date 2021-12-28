@@ -26,7 +26,7 @@ for suffix in rktd dot png html; do
 done
 
 # in:
-./gg --search -o "$data_file" $search_paths
+./gg --search -x '/_build/' -x '/deps/' -o "$data_file" $search_paths
 
 # outs:
 ./gg --read --dir-tree "$dir_tree_dir" "$data_file"
