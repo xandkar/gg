@@ -412,10 +412,14 @@
                     (invariant-assertion ".git" (path->string .git))
                     (invariant-assertion #f trailing-slash?)
                     work-tree)))
-            (define dir (reroot-path local-path
-                                     (build-path rooted-in (Local-hostname loc))))
-            (define file-roots (build-path dir "roots.txt"))
-            (define file-remotes (build-path dir "remotes.txt"))
+            (define dir-index-by-host
+              (let ([new-root (build-path rooted-in
+                                          "indices"
+                                          "by-host"
+                                          (Local-hostname loc))])
+                (reroot-path local-path new-root)))
+            (define file-roots (build-path dir-index-by-host "roots.txt"))
+            (define file-remotes (build-path dir-index-by-host "remotes.txt"))
             (make-parent-directory* file-roots)
             (make-parent-directory* file-remotes)
             (display-lines-to-file
