@@ -56,7 +56,9 @@
         (struct/dc Error [data β])))
 
 (define current-ignore-file
-  (make-parameter (build-path (current-directory) ".gg-ignore")))
+  (make-parameter
+    (build-path (current-directory)
+                (format ".gg-ignore-~a" (gethostname)))))
 
 (define/contract (exe program . args)
   (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
@@ -198,6 +200,7 @@
   ; # comment
   ; p <prefix>
   ; x <regexp>
+  (eprintf "parsing ignore file: ~a~n" path)
   (foldl (λ (line ignore)
             (define len (string-length line))
             (cond
@@ -485,7 +488,7 @@
       ; Input filters:
       #:multi
       [("-i" "--ignore-file")
-       ignore-file "Input filters file. Default: $PWD/.gg-ignore"
+       ignore-file "Input filters file. Default: $PWD/.gg-ignore-$HOST"
        (invariant-assertion path-string? ignore-file)
        (invariant-assertion file-exists? ignore-file)
        (current-ignore-file (normalize-path ignore-file))]

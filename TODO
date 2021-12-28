@@ -1,4 +1,4 @@
-- [ ] host-specific ignore files
+- [x] host-specific ignore files
 - [ ] figure out an index layout/scheme
     - host
     - root
