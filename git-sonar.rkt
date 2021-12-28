@@ -190,6 +190,7 @@
           (set-union (Ignore-regexp i1)
                      (Ignore-regexp i2))))
 
+;; TODO Tests for file->ignore.
 (define/contract (file->ignore path)
   (-> path-string? Ignore?)
   ; # comment
@@ -204,12 +205,14 @@
               [(and (> len 0) (equal? #\# (string-ref line 0))) i]
               ; prefix
               [(and (> len 2)
+                    (equal? #\p (string-ref line 0))
                     (path-string? (substring line 2 len)))
                (struct-copy Ignore i [prefix (set-add (Ignore-prefix i) (substring line 2 len))])]
               ; regexp
               [(and (> len 2)
+                    (equal? #\x (string-ref line 0))
                     (pregexp? (pregexp (substring line 2 len) (λ (err-msg) err-msg))))
-               (struct-copy Ignore i [regexp (set-add (Ignore-regexp i) (substring line 2 len))])]
+               (struct-copy Ignore i [regexp (set-add (Ignore-regexp i) (pregexp (substring line 2 len)))])]
               ; invalid
               [else
                 (eprintf "WARNING: skipping an invalid line in ignore file: ~v~n" line)
