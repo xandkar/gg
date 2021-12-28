@@ -400,11 +400,13 @@
             (make-parent-directory* file-remotes)
             (display-lines-to-file
               (map (λ (rem) (format "~a ~a" (Remote-name rem) (Remote-addr rem)))
-                   (Local-remotes loc))
+                   (sort (Local-remotes loc)
+                         (λ (r1 r2) (string<? (Remote-name r1)
+                                              (Remote-name r2)))))
               file-remotes
               #:exists 'replace)
             (display-lines-to-file
-              (set->list (Repo-roots rep))
+              (sort (set->list (Repo-roots rep)) string<?)
               file-roots
               #:exists 'replace))
          (Repo-locals rep)))
