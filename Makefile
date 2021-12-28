@@ -1,4 +1,4 @@
-EXE := git-sonar
+EXE := gg
 PREFIX := $(HOME)
 
 $(EXE): $(EXE).rkt

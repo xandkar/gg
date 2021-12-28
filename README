@@ -1,7 +1,8 @@
-git-sonar
-=========
+gg
+=======
+git git
 
-A search tool to answer the age-old question: "Where my gits at?"
+A tool to git all your gits and answer the age-old question: "Where my gits at?"
 
 To discover, catalogue and compare repos across N machines.
 
@@ -19,4 +20,4 @@ To discover, catalogue and compare repos across N machines.
 3. Decide what should be pruned, moved, updated or whatever;
 4. GOTO 1
 
-`git-sonar` is mainly motivated by 1, but also aims to be useful for 2.
+gg is mainly motivated by 1, but also aims to be useful for 2.

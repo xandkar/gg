@@ -56,7 +56,7 @@
         (struct/dc Error [data β])))
 
 (define current-ignore-file
-  (make-parameter (build-path (current-directory) ".git-sonar-ignore")))
+  (make-parameter (build-path (current-directory) ".gg-ignore")))
 
 (define/contract (exe program . args)
   (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
@@ -485,7 +485,7 @@
       ; Input filters:
       #:multi
       [("-i" "--ignore-file")
-       ignore-file "Input filters file. Default: $PWD/.git-sonar-ignore"
+       ignore-file "Input filters file. Default: $PWD/.gg-ignore"
        (invariant-assertion path-string? ignore-file)
        (invariant-assertion file-exists? ignore-file)
        (current-ignore-file (normalize-path ignore-file))]
