@@ -1,6 +1,7 @@
 #lang racket
 
-(require racket/os
+(require file/sha1
+         racket/os
          racket/serialize
          xml)
 
@@ -49,6 +50,8 @@
       (struct/dc Repo
                  [roots  (set/c string?)]
                  [locals locals?]))
+
+;; TODO Repos: a custom set by roots?
 
 (struct/contract Ignore
                  ([prefix (set/c path?)]
@@ -398,41 +401,134 @@
 
 (define/contract (output-dir-tree repos rooted-in)
   (-> (listof Repo?) path? void?)
+  ; TODO data/$host.rktd
+  ; TODO reports/...
+  (define (local->work-tree-path loc)
+    ; XXX Use work tree for non-bares. TODO Consider optionalizing.
+    (if (Local-bare? loc)
+        (Local-path loc)
+        (match-let-values
+          ([(work-tree .git trailing-slash?) (split-path (Local-path loc))])
+          (invariant-assertion absolute-path? work-tree)
+          (invariant-assertion ".git" (path->string .git))
+          (invariant-assertion #f trailing-slash?)
+          work-tree)))
+
+  (define (local->by-host-dir-path loc)
+    (reroot-path
+      (local->work-tree-path loc)
+      (build-path rooted-in "indices" "by-host" (Local-hostname loc))))
+
+  (define (remote->by-host-dir-path rem)
+    ; TODO Parse URI (no just URL)
+    (raise 'not-implemented))
+
+  (define/contract (write-by-host roots loc)
+    (-> (listof string?) Local? void?)
+    (define dir-index-by-host (local->by-host-dir-path loc))
+    (make-directory* dir-index-by-host)
+
+    (when (Local-description loc)
+      (display-to-file
+        (Local-description loc)
+        (build-path dir-index-by-host "description")
+        #:exists 'replace))
+
+    ; TODO remotes as dir with links to by-host/$remote-host/$path - need URI parsing.
+    (display-lines-to-file
+      (map (λ (rem) (format "~a ~a" (Remote-name rem) (Remote-addr rem)))
+           (sort (Local-remotes loc)
+                 (λ (r1 r2) (string<? (Remote-name r1)
+                                      (Remote-name r2)))))
+      (build-path dir-index-by-host "remotes")
+      #:exists 'replace)
+
+    ; TODO roots as dir with links to by-root/$root?
+    (let ([dir (build-path dir-index-by-host "roots")])
+      (make-directory* dir)
+      (for-each
+        (λ (root)
+           (define link-path (build-path dir root))
+           (define link-target (build-path rooted-in "indices" "by-root" root))
+           (unless (link-exists? link-path)
+             (make-file-or-directory-link
+               link-target
+               link-path)))
+        roots)))
+
+  ; FIXME Links must point to relative paths!
+
+  (define/contract (write-by-roots roots loc)
+    (-> (listof string?) Local? void?)
+    (define dir-index-by-roots
+      ; Concatenated-roots string is sometimes too-long for a valid filename.
+      (let* ([roots (sort roots string<?)]
+             [roots (string-join roots ",")]
+             [roots (string->bytes/utf-8 roots)]
+             [roots (bytes->hex-string (sha256-bytes roots))])
+        (build-path rooted-in "indices" "by-roots" roots)))
+    (make-directory* dir-index-by-roots)
+    (define loc-path (local->work-tree-path loc))
+    (invariant-assertion absolute-path? loc-path)
+    (define link-name
+      (string-join (cons (Local-hostname loc)
+                         (map path->string (cdr (explode-path loc-path))))
+                   "---"))
+    (define link-path (build-path dir-index-by-roots link-name))
+    (unless (link-exists? link-path)
+      (make-file-or-directory-link
+        (local->by-host-dir-path loc)
+        link-path)))
+
+  (define/contract (write-by-root roots loc)
+    (-> (listof string?) Local? void?)
+    (for-each
+      (λ (root)
+         (define dir-index-by-root (build-path rooted-in "indices" "by-root" root))
+         (make-directory* dir-index-by-root)
+         (define loc-path (local->work-tree-path loc))
+         (invariant-assertion absolute-path? loc-path)
+         (define link-name
+           (string-join (cons (Local-hostname loc)
+                              (map path->string (cdr (explode-path loc-path))))
+                        "---"))
+         (define link-path (build-path dir-index-by-root link-name))
+         (unless (link-exists? link-path)
+           (make-file-or-directory-link
+             (local->by-host-dir-path loc)
+             link-path)))
+      roots))
+
+  (define/contract (local->name loc)
+    (-> Local? string?)
+    (path->string (last (explode-path (local->work-tree-path loc)))))
+
+  (define/contract (write-by-name loc)
+    (-> Local? void?)
+    (define name (local->name loc))
+    (define dir-index-by-name (build-path rooted-in "indices" "by-name" name))
+    (make-directory* dir-index-by-name)
+    (define link-name
+      (let ([loc-path (local->work-tree-path loc)])
+        (invariant-assertion absolute-path? loc-path)
+        (string-join (cons (Local-hostname loc)
+                           (map path->string (cdr (explode-path loc-path))))
+                     "---")))
+    (define link-path (build-path dir-index-by-name link-name))
+    (unless (link-exists? link-path)
+      (make-file-or-directory-link
+        (local->by-host-dir-path loc)
+        link-path)))
+
   (for-each
     (λ (rep)
        (for-each
          (λ (loc)
-            (define local-path
-              ; XXX Use work tree for non-bares. TODO Consider optionalizing.
-              (if (Local-bare? loc)
-                  (Local-path loc)
-                  (match-let-values
-                    ([(work-tree .git trailing-slash?) (split-path (Local-path loc))])
-                    (invariant-assertion absolute-path? work-tree)
-                    (invariant-assertion ".git" (path->string .git))
-                    (invariant-assertion #f trailing-slash?)
-                    work-tree)))
-            (define dir-index-by-host
-              (let ([new-root (build-path rooted-in
-                                          "indices"
-                                          "by-host"
-                                          (Local-hostname loc))])
-                (reroot-path local-path new-root)))
-            (define file-roots (build-path dir-index-by-host "roots.txt"))
-            (define file-remotes (build-path dir-index-by-host "remotes.txt"))
-            (make-parent-directory* file-roots)
-            (make-parent-directory* file-remotes)
-            (display-lines-to-file
-              (map (λ (rem) (format "~a ~a" (Remote-name rem) (Remote-addr rem)))
-                   (sort (Local-remotes loc)
-                         (λ (r1 r2) (string<? (Remote-name r1)
-                                              (Remote-name r2)))))
-              file-remotes
-              #:exists 'replace)
-            (display-lines-to-file
-              (sort (set->list (Repo-roots rep)) string<?)
-              file-roots
-              #:exists 'replace))
+            (define roots (set->list (Repo-roots rep)))
+            (write-by-host roots loc)
+            (write-by-name loc)
+            (write-by-root roots loc)
+            (write-by-roots roots loc))
          (Repo-locals rep)))
     repos))
 

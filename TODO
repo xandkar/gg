@@ -52,7 +52,8 @@ operations:
                 ... and whatever other ideas come-up ...
         indices/by-host/$host/$path/<repo-state-files>
                 by-root/$root/<symlink-to-by-host-leaf-dir>   # how to name?
-                by-roots/$roots/<symlink-to-by-host-leaf-dir> # how to name?
+                by-roots/$sha256_of_roots/<symlink-to-by-host-leaf-dir> # how to name?
+                by-name/$name_of_work_tree_dir/<symlink-to-by-host-leaf-dir>
 - update
     1. read previous search data
         $PWD/data/*.rktd
