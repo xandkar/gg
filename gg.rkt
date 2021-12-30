@@ -1,6 +1,7 @@
 #lang racket
 
 (require file/sha1
+         net/url
          racket/os
          racket/serialize
          xml)
@@ -28,6 +29,12 @@
   ()
   #:transparent)
 
+;; TODO Maybe unify the idea of Local and Remote?
+;; "Local" should just be "Repo" and "Remote" a "RemoteRef" which points to a
+;; "Repo" in some table, which we try to fill with remote lookups?
+;; 1) find local repos;
+;; 2) collect remote refs from found local repos;
+;; 3) lookup remote refs and add the found ones to list of repos.
 (set! Local?
       (struct/dc Local
                  [hostname    string?]
@@ -399,8 +406,28 @@
                                 ([style "font-family:mono"])
                                 ,repos-table)))))
 
-(define/contract (output-dir-tree repos rooted-in)
-  (-> (listof Repo?) path? void?)
+(define sha256
+  (compose bytes->hex-string sha256-bytes string->bytes/utf-8))
+
+(define (roots-hash roots)
+  (sha256 (string-join (sort roots string<?) ",")))
+
+(define/contract (link target alias)
+  (-> path? path? void?)
+  (unless (link-exists? alias)
+    (make-parent-directory* alias)
+    (make-file-or-directory-link
+      (apply build-path (append (map (λ (_) 'up) (cdr (explode-path alias))) `(,target)))
+      alias)))
+
+(define/contract (lines-to-file path lines)
+  (-> path? (listof string?) void?)
+  (make-parent-directory* path)
+  (display-lines-to-file lines path #:exists 'replace))
+
+(define/contract (output-dir-tree repos)
+  (-> (listof Repo?) void?)
+  ; TODO Refactor this big mess of a procedure
   ; TODO data/$host.rktd
   ; TODO reports/...
   (define (local->work-tree-path loc)
@@ -415,110 +442,104 @@
           work-tree)))
 
   (define (local->by-host-dir-path loc)
+    ; TODO assert that we're rerooting an absolute path to a relative one.
     (reroot-path
       (local->work-tree-path loc)
-      (build-path rooted-in "indices" "by-host" (Local-hostname loc))))
+      (build-path "index" "by-host" (Local-hostname loc))))
 
-  (define (remote->by-host-dir-path rem)
-    ; TODO Parse URI (no just URL)
-    (raise 'not-implemented))
+  (define/contract (remote->by-host-dir-path rem)
+    (-> Remote? (or/c #f (cons/c string? path?)))
+    (with-handlers
+      ([exn? (λ (_)
+                ; TODO Parse git's alternative scp-like SSH URI syntax
+                ;      https://git-scm.com/docs/git-clone#_git_urls
+                #f)])
+      (define u (string->url (Remote-addr rem)))
+      (define host (url-host u))
+      (define path (reroot-path
+                     (apply build-path (map path/param-path (url-path u)))
+                     (build-path "index" "by-host" host)))
+      (cons (Remote-name rem) path)))
 
   (define/contract (write-by-host roots loc)
     (-> (listof string?) Local? void?)
     (define dir-index-by-host (local->by-host-dir-path loc))
-    (make-directory* dir-index-by-host)
 
     (when (Local-description loc)
-      (display-to-file
-        (Local-description loc)
+      (lines-to-file
         (build-path dir-index-by-host "description")
-        #:exists 'replace))
+        `(,(Local-description loc))))
 
-    ; TODO remotes as dir with links to by-host/$remote-host/$path - need URI parsing.
-    (display-lines-to-file
+    (define remotes (Local-remotes loc))
+    (define remotes-parsed (filter-map remote->by-host-dir-path remotes))
+    (for-each
+      (match-lambda
+        [(cons name path)
+         (link path
+               (build-path dir-index-by-host "remotes" name))])
+      remotes-parsed)
+
+    (lines-to-file
+      (build-path dir-index-by-host "remotes.txt")
       (map (λ (rem) (format "~a ~a" (Remote-name rem) (Remote-addr rem)))
-           (sort (Local-remotes loc)
+           (sort remotes
                  (λ (r1 r2) (string<? (Remote-name r1)
-                                      (Remote-name r2)))))
-      (build-path dir-index-by-host "remotes")
-      #:exists 'replace)
+                                      (Remote-name r2))))))
 
-    ; TODO roots as dir with links to by-root/$root?
     (let ([dir (build-path dir-index-by-host "roots")])
-      (make-directory* dir)
       (for-each
         (λ (root)
-           (define link-path (build-path dir root))
-           (define link-target (build-path rooted-in "indices" "by-root" root))
-           (unless (link-exists? link-path)
-             (make-file-or-directory-link
-               link-target
-               link-path)))
+           (link
+             (build-path "index" "by-root" root)
+             (build-path dir root)))
         roots)))
-
-  ; FIXME Links must point to relative paths!
 
   (define/contract (write-by-roots roots loc)
     (-> (listof string?) Local? void?)
     (define dir-index-by-roots
       ; Concatenated-roots string is sometimes too-long for a valid filename.
-      (let* ([roots (sort roots string<?)]
-             [roots (string-join roots ",")]
-             [roots (string->bytes/utf-8 roots)]
-             [roots (bytes->hex-string (sha256-bytes roots))])
-        (build-path rooted-in "indices" "by-roots" roots)))
-    (make-directory* dir-index-by-roots)
+      (build-path "index" "by-roots" (roots-hash roots)))
     (define loc-path (local->work-tree-path loc))
     (invariant-assertion absolute-path? loc-path)
     (define link-name
       (string-join (cons (Local-hostname loc)
                          (map path->string (cdr (explode-path loc-path))))
                    "---"))
-    (define link-path (build-path dir-index-by-roots link-name))
-    (unless (link-exists? link-path)
-      (make-file-or-directory-link
-        (local->by-host-dir-path loc)
-        link-path)))
+    (link (local->by-host-dir-path loc)
+          (build-path dir-index-by-roots link-name)))
 
   (define/contract (write-by-root roots loc)
     (-> (listof string?) Local? void?)
     (for-each
       (λ (root)
-         (define dir-index-by-root (build-path rooted-in "indices" "by-root" root))
-         (make-directory* dir-index-by-root)
+         (define dir-index-by-root (build-path "index" "by-root" root))
          (define loc-path (local->work-tree-path loc))
          (invariant-assertion absolute-path? loc-path)
          (define link-name
            (string-join (cons (Local-hostname loc)
                               (map path->string (cdr (explode-path loc-path))))
                         "---"))
-         (define link-path (build-path dir-index-by-root link-name))
-         (unless (link-exists? link-path)
-           (make-file-or-directory-link
-             (local->by-host-dir-path loc)
-             link-path)))
+         (link (local->by-host-dir-path loc)
+               (build-path dir-index-by-root link-name)))
       roots))
 
   (define/contract (local->name loc)
     (-> Local? string?)
     (path->string (last (explode-path (local->work-tree-path loc)))))
 
-  (define/contract (write-by-name loc)
-    (-> Local? void?)
+  (define/contract (write-by-name roots loc)
+    (-> (listof string?) Local? void?)
     (define name (local->name loc))
-    (define dir-index-by-name (build-path rooted-in "indices" "by-name" name))
-    (make-directory* dir-index-by-name)
+    (define dir-index-by-name
+      (build-path "index" "by-name" name (roots-hash roots)))
     (define link-name
       (let ([loc-path (local->work-tree-path loc)])
         (invariant-assertion absolute-path? loc-path)
         (string-join (cons (Local-hostname loc)
                            (map path->string (cdr (explode-path loc-path))))
                      "---")))
-    (define link-path (build-path dir-index-by-name link-name))
-    (unless (link-exists? link-path)
-      (make-file-or-directory-link
-        (local->by-host-dir-path loc)
-        link-path)))
+    (link (local->by-host-dir-path loc)
+          (build-path dir-index-by-name link-name)))
 
   (for-each
     (λ (rep)
@@ -526,7 +547,7 @@
          (λ (loc)
             (define roots (set->list (Repo-roots rep)))
             (write-by-host roots loc)
-            (write-by-name loc)
+            (write-by-name roots loc)
             (write-by-root roots loc)
             (write-by-roots roots loc))
          (Repo-locals rep)))
@@ -547,8 +568,10 @@
 (define/contract (output out-format repos)
   (-> out-format? (listof Repo?) void?)
   (match out-format
+    [(DirTree rooted-in)
+     (parameterize ([current-directory rooted-in])
+       (output-dir-tree repos))]
     ['serial (write (serialize repos))]
-    [(DirTree rooted-in) (output-dir-tree repos rooted-in)]
     ['report-html (output-html repos)]
     ['report-graph (output-graph repos)]))
 
