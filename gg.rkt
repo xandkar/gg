@@ -529,9 +529,6 @@
 
   (define/contract (write-by-name roots loc)
     (-> (listof string?) Local? void?)
-    (define name (local->name loc))
-    (define dir-index-by-name
-      (build-path "index" "by-name" name (roots-hash roots)))
     (define link-name
       (let ([loc-path (local->work-tree-path loc)])
         (invariant-assertion absolute-path? loc-path)
@@ -539,7 +536,7 @@
                            (map path->string (cdr (explode-path loc-path))))
                      "---")))
     (link (local->by-host-dir-path loc)
-          (build-path dir-index-by-name link-name)))
+          (build-path "index" "by-name" (local->name loc) link-name)))
 
   (for-each
     (λ (rep)
