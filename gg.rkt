@@ -445,7 +445,7 @@
     ; TODO assert that we're rerooting an absolute path to a relative one.
     (reroot-path
       (local->work-tree-path loc)
-      (build-path "index" "by-host" (Local-hostname loc))))
+      (build-path "by-host" (Local-hostname loc))))
 
   (define/contract (remote->by-host-dir-path rem)
     (-> Remote? (or/c #f (cons/c string? path?)))
@@ -458,7 +458,7 @@
       (define host (url-host u))
       (define path (reroot-path
                      (apply build-path (map path/param-path (url-path u)))
-                     (build-path "index" "by-host" host)))
+                     (build-path "by-host" host)))
       (cons (Remote-name rem) path)))
 
   (define/contract (write-by-host roots loc)
@@ -490,7 +490,7 @@
       (for-each
         (λ (root)
            (link
-             (build-path "index" "by-root" root)
+             (build-path "by-root" root)
              (build-path dir root)))
         roots)))
 
@@ -498,7 +498,7 @@
     (-> (listof string?) Local? void?)
     (define dir-index-by-roots
       ; Concatenated-roots string is sometimes too-long for a valid filename.
-      (build-path "index" "by-roots" (roots-hash roots)))
+      (build-path "by-roots" (roots-hash roots)))
     (define loc-path (local->work-tree-path loc))
     (invariant-assertion absolute-path? loc-path)
     (define link-name
@@ -512,7 +512,7 @@
     (-> (listof string?) Local? void?)
     (for-each
       (λ (root)
-         (define dir-index-by-root (build-path "index" "by-root" root))
+         (define dir-index-by-root (build-path "by-root" root))
          (define loc-path (local->work-tree-path loc))
          (invariant-assertion absolute-path? loc-path)
          (define link-name
@@ -536,7 +536,7 @@
                            (map path->string (cdr (explode-path loc-path))))
                      "---")))
     (link (local->by-host-dir-path loc)
-          (build-path "index" "by-name" (local->name loc) link-name)))
+          (build-path "by-name" (local->name loc) link-name)))
 
   (for-each
     (λ (rep)
