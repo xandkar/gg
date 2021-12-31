@@ -1,0 +1,11 @@
+#
+p ~/.cargo/
+p ~/.emacs.d/
+p ~/.go/
+p ~/.oh-my-zsh/
+
+# rebar2
+x /deps/
+
+# rebar3
+x /_build/

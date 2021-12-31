@@ -1,2 +1,7 @@
 data/
+example/data/
+example/indices/
+example/reports/
+example/.gg-ignore-*
+!example/.gg-ignore-HOSTNAME
 gg
