@@ -1,4 +1,10 @@
+# # comment
+# p <prefix>
+# x <regexp>
 #
+# See pregexp grammar at:
+# https://docs.racket-lang.org/reference/regexp.html#%28part._regexp-syntax%29
+
 p ~/.cargo/
 p ~/.emacs.d/
 p ~/.go/
