@@ -25,3 +25,13 @@ $(IGNORE_FILE):
 
 $(SEARCH_TARGETS_FILE):
 	cp $(SEARCH_TARGETS_FILE_EXAMPLE) $(SEARCH_TARGETS_FILE)
+
+.PHONY: render
+render: reports/host.$(HOST).png \
+        reports/all.png
+
+reports/host.$(HOST).png: reports/host.$(HOST).dot
+	neato -Tpng -Goverlap=false -o $@ $<
+
+reports/all.png: reports/all.dot
+	neato -Tpng -Goverlap=false -o $@ $<
