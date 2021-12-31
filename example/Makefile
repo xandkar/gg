@@ -14,5 +14,10 @@ update: $(IGNORE_FILE)
 	mkdir -p indices
 	gg --read --dir-tree indices data/*.rktd
 
+.PHONY: commit
+commit:
+	git add data reports indices
+	git commit -m "Update from $(HOST)"
+
 $(IGNORE_FILE):
 	cp $(IGNORE_FILE_EXAMPLE) $(IGNORE_FILE)
