@@ -4,4 +4,6 @@ example/indices/
 example/reports/
 example/.gg-ignore-*
 !example/.gg-ignore-HOSTNAME
+example/.gg-targets-*
+!example/.gg-targets-HOSTNAME
 gg

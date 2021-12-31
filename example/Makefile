@@ -1,11 +1,13 @@
 HOST := $(shell hostname)
 IGNORE_FILE := .gg-ignore-$(HOST)
 IGNORE_FILE_EXAMPLE := .gg-ignore-HOSTNAME
+SEARCH_TARGETS_FILE := .gg-targets-$(HOST)
+SEARCH_TARGETS_FILE_EXAMPLE := .gg-targets-HOSTNAME
 
 .PHONY: update
-update: $(IGNORE_FILE)
+update: $(SEARCH_TARGETS_FILE) $(IGNORE_FILE)
 	mkdir -p data
-	gg --search --output-file data/"$(HOST)".rktd ~
+	gg --search --output-file data/"$(HOST)".rktd $(shell xargs < $(SEARCH_TARGETS_FILE))
 	mkdir -p reports
 	gg --read --report-graph --output-file reports/host."$(HOST)".dot data/"$(HOST)".rktd
 	gg --read --report-graph --output-file reports/all.dot data/*.rktd
@@ -20,3 +22,6 @@ commit:
 
 $(IGNORE_FILE):
 	cp $(IGNORE_FILE_EXAMPLE) $(IGNORE_FILE)
+
+$(SEARCH_TARGETS_FILE):
+	cp $(SEARCH_TARGETS_FILE_EXAMPLE) $(SEARCH_TARGETS_FILE)
