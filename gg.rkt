@@ -425,6 +425,13 @@
   (make-parent-directory* path)
   (display-lines-to-file lines path #:exists 'replace))
 
+(define/contract (reroot path root)
+  (-> path? path? path?)
+  (cond
+    [(relative-path? path) (build-path root path)]
+    [(absolute-path? path) (apply build-path (cons root (cdr (explode-path path))))]
+    [else (assert-unreachable)]))
+
 (define/contract (output-dir-tree repos)
   (-> (listof Repo?) void?)
   ; TODO Refactor this big mess of a procedure
@@ -442,8 +449,7 @@
           work-tree)))
 
   (define (local->by-host-dir-path loc)
-    ; TODO assert that we're rerooting an absolute path to a relative one.
-    (reroot-path
+    (reroot
       (local->work-tree-path loc)
       (build-path "by-host" (Local-hostname loc))))
 
@@ -455,10 +461,9 @@
                 ;      https://git-scm.com/docs/git-clone#_git_urls
                 #f)])
       (define u (string->url (Remote-addr rem)))
-      (define host (url-host u))
-      (define path (reroot-path
+      (define path (reroot
                      (apply build-path (map path/param-path (url-path u)))
-                     (build-path "by-host" host)))
+                     (build-path "by-host" (url-host u))))
       (cons (Remote-name rem) path)))
 
   (define/contract (write-by-host roots loc)
