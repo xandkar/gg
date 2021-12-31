@@ -1,7 +1,7 @@
 Example meta repo
 =================
 Here's what an example repo to track all your repos might look like. Take a
-look at the `Makefile`.
+look at the [`Makefile`](Makefile).
 
 TL;DR
 -----
