@@ -480,6 +480,10 @@
     (for-each
       (match-lambda
         [(cons name path)
+         ; XXX A dummy file until we implement spidering out to remotes:
+         (lines-to-file
+           (build-path path "placeholder-until-querying-remotes-is-implemented")
+           '())
          (link path
                (build-path dir-index-by-host "remotes" name))])
       remotes-parsed)
