@@ -9,8 +9,7 @@ update: $(IGNORE_FILE)
 	mkdir -p reports
 	gg --read --report-graph --output-file reports/host."$(HOST)".dot data/"$(HOST)".rktd
 	gg --read --report-graph --output-file reports/all.dot data/*.rktd
-	# XXX So that git can detect file renames/deletions for us automatically:
-	rm -rf indices
+	rm -rf indices	# XXX So that git can detect file renames/deletions for us automatically.
 	mkdir -p indices
 	gg --read --dir-tree indices data/*.rktd
 
