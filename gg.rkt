@@ -112,26 +112,29 @@
   (map str->ref lines))
 
 (define/contract (exe program . args)
-  (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
+  (->* (string?) #:rest (listof string?) (Result/c (listof string?)
+                                                   (cons/c integer? (listof string?))))
   (define program-path (find-executable-path program))
   (match-define
     (list stdout stdin _pid stderr ctrl)
     (apply process* program-path args))
-  (define lines (port->lines stdout))
-  (ctrl 'wait)
-  (define result
-    (match (ctrl 'exit-code)
-      [0 (Ok lines)]
-      [error-code
-        (eprintf "~n")
-        (eprintf "Command failure: ~a program-path:~v args:~v~n" error-code program-path args)
-        (copy-port stderr (current-error-port))
-        (eprintf "~n")
-        (Error error-code)]))
   (close-output-port stdin)
+  (thread (λ ()
+             ; XXX Subprocess gets blocked if we don't drain its stderr
+             ;     when there're more err lines than buffer:
+             (copy-port stderr (current-error-port))
+             (close-input-port stderr)))
+  (define lines (port->lines stdout))
   (close-input-port stdout)
-  (close-input-port stderr)
-  result)
+  (ctrl 'wait)
+  (match (ctrl 'exit-code)
+    [0 (Ok lines)]
+    [error-code
+      (eprintf "~nCommand failure: ~a, program-path:~v, args:~v.~n~n"
+               error-code
+               (path->string program-path)
+               args)
+      (Error (cons error-code lines))]))
 
 (define/contract (git-dir->remotes dir)
   (-> path? (listof Remote?))
@@ -150,7 +153,7 @@
 (define/contract (git-dir->bare? dir)
   (-> path? (Result/c boolean? integer?))
   (match (exe "git" (format "--git-dir=~a" (path->string dir)) "rev-parse" "--is-bare-repository")
-    [(and (Error _) e) e]
+    [(Error (cons code _)) (Error code)]
     [(Ok (list* "true" _)) (Ok #t)]
     [(Ok (list* "false" _)) (Ok #f)]))
 
@@ -164,7 +167,7 @@
 (define/contract (git-dir->heads dir)
   (-> path? (Result/c (listof Ref?) integer?))
   (match (exe "git" (format "--git-dir=~a" (path->string dir)) "show-ref" "--heads")
-    [(and (Error _) e) e]
+    [(Error (cons code _)) (Error code)]
     [(Ok lines) (Ok (lines->refs lines))]))
 
 (define/contract (git-remote-heads address)
@@ -180,7 +183,7 @@
     (thread (λ ()
                (define result
                  (match (exe "git" "ls-remote" "--heads" address)
-                   [(and (Error _) e) e]
+                   [(Error (cons code _)) (Error code)]
                    [(Ok lines) (Ok (lines->refs lines))]))
                (channel-put result-chan result))))
   (define result (sync timeout-chan result-chan))
@@ -190,13 +193,14 @@
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path?) (listof path?))
-  (define (find search-path)
-    ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
-    ; TODO find can take all the search paths at once - pass them here!
-    (match (exe "find" (path->string search-path) "-type" "d" "-name" ".git")
-      [(Error _) '()]
-      [(Ok lines) (map normalize-path lines)]))
-  (append* (map find search-paths)))
+  ; TODO Revert to a stream, write to channel, consume by N workers.
+  ; TODO Check OS and maybe dispatch the (albeit slower) Racket version of find.
+  (define lines
+    (match (apply exe (append (cons "find" (map path->string search-paths))
+                              '("-type" "d" "-name" ".git")))
+      [(Error (cons _ lines)) lines]
+      [(Ok lines) lines]))
+  (map normalize-path lines))
 
 (define uniq
   (compose set->list list->set))
@@ -375,8 +379,8 @@
                  (set-add! all-remotes rem)
                  (define edge-color
                    (if (Remote-reachable? rem)
-                     "lightblue"
-                     "tomato"))
+                       "lightblue"
+                       "tomato"))
                  (printf
                    "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=~a fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
                    (node-id-local loc)
