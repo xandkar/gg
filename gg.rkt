@@ -9,24 +9,36 @@
 ; TODO serializable-struct/contract
 ; TODO serializable-struct/versions/contract
 
+(serializable-struct/versions Ref 0 (name digest) () #:transparent)
+
+(set! Ref?
+      (struct/dc Ref
+                 [name string?]
+                 [digest string?]))
+
 (serializable-struct/versions
   ; TODO Check and mark remote status. git ls-remote --heads (<remote-name>|<remote-addr>)
   Remote
-  0
-  (name addr)
-  ()
+  1
+  (name addr heads reachable?)
+  ([0 (λ (name addr) (Remote name addr '() #f))
+      '()])
   #:transparent)
 
 (set! Remote?
       (struct/dc Remote
                  [name string?] ; TODO Should be: [names (set/c string?)]
-                 [addr string?]))
+                 [addr string?]
+                 [heads (listof Ref?)]
+                 [reachable? boolean?]))
 
 (serializable-struct/versions
   Local
-  0
-  (hostname path bare? description remotes)
-  ()
+  1
+  (hostname path bare? description heads remotes)
+  ([0 (λ (hostname path bare? description remotes)
+         (Local hostname path bare? description '() remotes))
+      '()])
   #:transparent)
 
 ;; TODO Maybe unify the idea of Local and Remote?
@@ -41,6 +53,7 @@
                  [path        (and/c path? absolute-path?)]
                  [bare?       boolean?]
                  [description (or/c #f string?)]
+                 [heads       (listof Ref?)]
                  [remotes     (listof Remote?)]))
 
 ;; TODO locals should be a custom set keyed on hostname+path
@@ -87,6 +100,17 @@
     (build-path (current-directory)
                 (format ".gg-ignore-~a" (gethostname)))))
 
+(define (str->ref str)
+  (match-define (list digest name-path) (string-split str))
+  (define name
+    ; "refs/heads/author/branch" -> "author/branch"
+    ; "refs/heads/master"        -> "master"
+    (string-join (drop (string-split name-path "/") 2) "/"))
+  (Ref name digest))
+
+(define (lines->refs lines)
+  (map str->ref lines))
+
 (define/contract (exe program . args)
   (->* (string?) #:rest (listof string?) (Result/c (listof string?) integer?))
   (define program-path (find-executable-path program))
@@ -95,18 +119,19 @@
     (apply process* program-path args))
   (define lines (port->lines stdout))
   (ctrl 'wait)
-  (match (ctrl 'status)
-    ['done-ok (void)]
-    ['done-error
-     (eprintf "~n")
-     (eprintf "Command failure. program-path:~v args:~v~n" program-path args)
-     (copy-port stderr (current-error-port))
-     (eprintf "~n")
-     (Error (ctrl 'exit-code))])
+  (define result
+    (match (ctrl 'exit-code)
+      [0 (Ok lines)]
+      [error-code
+        (eprintf "~n")
+        (eprintf "Command failure: ~a program-path:~v args:~v~n" error-code program-path args)
+        (copy-port stderr (current-error-port))
+        (eprintf "~n")
+        (Error error-code)]))
   (close-output-port stdin)
   (close-input-port stdout)
   (close-input-port stderr)
-  (Ok lines))
+  result)
 
 (define/contract (git-dir->remotes dir)
   (-> path? (listof Remote?))
@@ -114,7 +139,13 @@
   (match (exe "git" (format "--git-dir=~a" (path->string dir)) "remote" "-v")
     [(Error _) '()]
     [(Ok lines)
-     (uniq (map (λ (line) (apply Remote (take (string-split line) 2))) lines))]))
+     (map (match-lambda [(list name addr)
+                         (define-values (heads reachable?)
+                           (match (git-remote-heads addr)
+                             [(Ok heads) (values heads #t)]
+                             [(Error _) (values '() #f)]))
+                         (Remote name addr heads reachable?)])
+          (uniq (map (λ (line) (take (string-split line) 2)) lines)))]))
 
 (define/contract (git-dir->bare? dir)
   (-> path? (Result/c boolean? integer?))
@@ -129,6 +160,33 @@
     [(Error _) #f]
     [(Ok '()) #f]
     [(Ok (and (list* _ _) roots)) roots]))
+
+(define/contract (git-dir->heads dir)
+  (-> path? (Result/c (listof Ref?) integer?))
+  (match (exe "git" (format "--git-dir=~a" (path->string dir)) "show-ref" "--heads")
+    [(and (Error _) e) e]
+    [(Ok lines) (Ok (lines->refs lines))]))
+
+(define/contract (git-remote-heads address)
+  (-> string? (Result/c (listof Ref?) (or/c integer? 'timeout)))
+  (define timeout-seconds 3) ; TODO Make configurable.
+  (define timeout-chan (make-channel))
+  (define result-chan (make-channel))
+  (define timeout-thread
+    (thread (λ ()
+               (sleep timeout-seconds)
+               (channel-put timeout-chan (Error 'timeout)))))
+  (define result-thread
+    (thread (λ ()
+               (define result
+                 (match (exe "git" "ls-remote" "--heads" address)
+                   [(and (Error _) e) e]
+                   [(Ok lines) (Ok (lines->refs lines))]))
+               (channel-put result-chan result))))
+  (define result (sync timeout-chan result-chan))
+  (kill-thread result-thread)
+  (kill-thread timeout-thread)
+  result)
 
 (define/contract (find-git-dirs search-paths)
   (-> (listof path?) (listof path?))
@@ -168,12 +226,15 @@
                     (define description (local-dir->description local-dir))
                     (define remotes (group->remotes group))
                     (define bare?-result (git-dir->bare? local-dir))
+                    (define heads-result (git-dir->heads local-dir))
                     ; XXX Assuming we already know local-dir is a valid repo:
                     (invariant-assertion Ok? bare?-result)
+                    (invariant-assertion Ok? heads-result)
                     (Local hostname
                            local-dir
                            (Ok-data bare?-result)
                            description
+                           (Ok-data heads-result)
                            remotes))
                  (group->local-dirs group)))
           (Repo roots locals))
@@ -312,12 +373,16 @@
             (for-each
               (λ (rem)
                  (set-add! all-remotes rem)
+                 (define edge-color
+                   (if (Remote-reachable? rem)
+                     "lightblue"
+                     "tomato"))
                  (printf
-                   ; TODO Red edge between a local and an unreachable remote.
-                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=lightblue fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
+                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=~a fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
                    (node-id-local loc)
                    (node-id-remote rem)
-                   (edge-label-local2remote loc rem)))
+                   (edge-label-local2remote loc rem)
+                   edge-color))
               (Local-remotes loc)))
          (Repo-locals repo)))
     repos)
