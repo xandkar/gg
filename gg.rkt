@@ -6,6 +6,9 @@
          racket/serialize
          xml)
 
+(module+ test
+  (require rackunit))
+
 ; TODO serializable-struct/contract
 ; TODO serializable-struct/versions/contract
 
@@ -76,6 +79,8 @@
 (define (Result/c α β)
   (or/c (struct/dc Ok [data α])
         (struct/dc Error [data β])))
+
+(define current-number-of-workers (make-parameter 25)) ; Fastest on my machine.
 
 (define current-ignore-file
   (make-parameter
@@ -199,10 +204,59 @@
              line)])
       #f))
 
+;; TODO Preserve order of elements OR rename to communicate that reorder is expected.
+;;      - concurrent-filter-bag-map
+;;      - concurrent-filter-map-bag
+;;      - bag-concurrent-filter-map
+;;      - bag-filter-map-concurrent
+;;      - ... ?
+(define/contract (concurrent-filter-map num-workers f xs)
+  (-> positive-integer? (-> any/c (or/c #f any/c)) (listof any/c) (listof any/c))
+  ; TODO How to express type params with contracts?
+  ;      I want to say: (∀ (α β) (-> Natural (-> α β) (Listof α) (Listof β)))
+  (define (make-worker id f)
+    (define parent (current-thread))
+    (λ ()
+       (define self (current-thread))
+       (define (work)
+         (thread-send parent (cons 'next self))
+         (match (thread-receive)
+           ['done          (thread-send parent (cons 'exit id))]
+           [(cons 'unit x) (begin
+                             (define y (f x))
+                             (when y (thread-send parent (cons 'result y)))
+                             (work))]))
+       (work)))
+  (define (dispatch ws xs ys)
+    (if (empty? ws)
+        ys
+        (match (thread-receive)
+          [(cons 'exit w)   (dispatch (remove w ws =) xs ys)]
+          [(cons 'result y) (dispatch ws xs (cons y ys))]
+          [(cons 'next thd) (match xs
+                              ['()         (begin
+                                             (thread-send thd 'done)
+                                             (dispatch ws xs ys))]
+                              [(cons x xs) (begin
+                                             (thread-send thd (cons 'unit x))
+                                             (dispatch ws xs ys))])])))
+  (define workers (range num-workers))
+  (define threads (map (λ (id) (thread (make-worker id f))) workers))
+  (define results (dispatch workers xs '()))
+  (for-each thread-wait threads)
+  results)
+
+(module+ test
+  (let* ([f        (λ (x) (if (even? x) x #f))]
+         [xs       (range 11)]
+         [actual   (sort (concurrent-filter-map 10 f xs) <)]
+         [expected (sort (           filter-map    f xs) <)])
+    (check-equal? actual expected "concurrent-filter-map")))
+
 (define/contract (find-git-repos hostname search-paths ignore)
   (-> string? (listof path?) Ignore? (listof Local?))
-  ; TODO concurrent-filter-map
-  (filter-map
+  (concurrent-filter-map
+    (current-number-of-workers)
     (λ (dir)
        (match (git-dir->roots dir)
          ; May still not actually be a valid repo:
@@ -574,6 +628,13 @@
 
       ; TODO stdin is default if no input file paths provided
       ; TODO overhaul option prefixes: --in-.., --out-.., ...
+
+      #:once-any
+      [("-j" "--jobs")
+       positive-integer "Number of concurrent search jobs (only meaningful with --search). Default: 25"
+       (let ([n (string->number positive-integer)])
+         (invariant-assertion positive-integer? n)
+         (current-number-of-workers n))]
 
       ; Input actions:
       #:once-any
