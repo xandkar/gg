@@ -16,12 +16,11 @@ prefix_link="$prefix_0".latest
 data_file="$prefix_real".rktd
 graph_file="$prefix_real".dot
 image_file="$prefix_real".png
-html_file="$prefix_real".html
 dir_tree_dir="$DATA_DIR"/repos."$timestamp"
 
 mkdir -p "$DATA_DIR"
 mkdir -p "$dir_tree_dir"
-for suffix in rktd dot png html; do
+for suffix in rktd dot png; do
     ln -sf "$prefix_real"."$suffix" "$prefix_link"."$suffix"
 done
 
@@ -30,7 +29,6 @@ done
 
 # outs:
 ./gg --read --dir-tree "$dir_tree_dir" "$data_file"
-./gg --read --report-html -o "$html_file" "$data_file"
 ./gg --read --report-graph -o "$graph_file" "$data_file"
 
 neato -Tpng -Goverlap=false -o "$image_file" "$graph_file"

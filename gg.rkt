@@ -17,28 +17,24 @@
                  [digest string?]))
 
 (serializable-struct/versions
-  ; TODO Check and mark remote status. git ls-remote --heads (<remote-name>|<remote-addr>)
-  Remote
-  1
+  Remote 0
   (name addr heads reachable?)
-  ([0 (λ (name addr) (Remote name addr '() #f))
-      '()])
+  ()
   #:transparent)
 
 (set! Remote?
       (struct/dc Remote
-                 [name string?] ; TODO Should be: [names (set/c string?)]
+                 ; Possibly multiple names per address.
+                 ; TODO Refactor to: [names (set/c string?)] ?
+                 [name string?]
                  [addr string?]
                  [heads (listof Ref?)]
                  [reachable? boolean?]))
 
 (serializable-struct/versions
-  Local
-  1
-  (hostname path bare? description heads remotes)
-  ([0 (λ (hostname path bare? description remotes)
-         (Local hostname path bare? description '() remotes))
-      '()])
+  Local 0
+  (hostname path bare? description roots heads remotes)
+  ()
   #:transparent)
 
 ;; TODO Maybe unify the idea of Local and Remote?
@@ -53,25 +49,11 @@
                  [path        (and/c path? absolute-path?)]
                  [bare?       boolean?]
                  [description (or/c #f string?)]
+                 [roots       (set/c string?)]
                  [heads       (listof Ref?)]
                  [remotes     (listof Remote?)]))
 
-;; TODO locals should be a custom set keyed on hostname+path
-(define locals? (listof Local?))
-
-(serializable-struct/versions
-  Repo
-  0
-  (roots locals)
-  ()
-  #:transparent)
-
-(set! Repo?
-      (struct/dc Repo
-                 [roots  (set/c string?)]
-                 [locals locals?]))
-
-;; TODO Repos: a custom set by roots?
+(define out-filter? (-> Local? boolean?))
 
 (struct/contract Ignore
                  ([prefix (set/c path?)]
@@ -83,7 +65,7 @@
 (struct/contract DirTree
                  ([root path?]))
 
-(define out-format? (or/c 'serial DirTree? 'report-graph 'report-html))
+(define out-format? (or/c 'serial DirTree? 'report-graph))
 (define out-dst? (or/c (cons/c 'file path?) 'stdout))
 (define data-source? (or/c Search? 'read))
 
@@ -205,7 +187,7 @@
 (define uniq
   (compose set->list list->set))
 
-(define/contract (local-dir->description path)
+(define/contract (git-dir->description path)
   (-> path? (or/c #f string?))
   (define path-description (build-path path "description"))
   (if (file-exists? path-description)
@@ -218,64 +200,38 @@
       #f))
 
 (define/contract (find-git-repos hostname search-paths ignore)
-  (-> string? (listof path?) Ignore? (listof Repo?))
-  ; All root sets are the same in a group, so roots of the first repo is as good as any:
-  (define (group->roots group) (first (first group)))
-  (define (group->local-dirs group) (map second group))
-  (define (group->remotes group) (uniq (append* (map third group))))
-  (map (λ (group)
-          (define roots (group->roots group))
-          (define locals
-            (map (λ (local-dir)
-                    (define description (local-dir->description local-dir))
-                    (define remotes (group->remotes group))
-                    (define bare?-result (git-dir->bare? local-dir))
-                    (define heads-result (git-dir->heads local-dir))
-                    ; XXX Assuming we already know local-dir is a valid repo:
-                    (invariant-assertion Ok? bare?-result)
-                    (invariant-assertion Ok? heads-result)
-                    (Local hostname
-                           local-dir
-                           (Ok-data bare?-result)
-                           description
-                           (Ok-data heads-result)
-                           remotes))
-                 (group->local-dirs group)))
-          (Repo roots locals))
-       (group-by first
-                 (foldl (λ (dir repos)
-                           ; TODO git lookups can be done concurrently
-                           (match (git-dir->roots dir)
-                             [#f repos]
-                             [roots
-                               (define remotes (git-dir->remotes dir))
-                               (define repo (list (list->set roots) dir remotes))
-                               (cons repo repos)]))
-                        '()
-                        (filter
-                          (λ (path)
-                             (define path-str (path->string path))
-                             (and (not (ormap (λ (p)
-                                                 (string-prefix? path-str
-                                                                 (path->string p)))
-                                              (set->list (Ignore-prefix ignore))))
-                                  (not (ormap (λ (px) (regexp-match? px path-str))
-                                              (set->list (Ignore-regexp ignore))))))
-                          (find-git-dirs search-paths))))))
+  (-> string? (listof path?) Ignore? (listof Local?))
+  ; TODO concurrent-filter-map
+  (filter-map
+    (λ (dir)
+       (match (git-dir->roots dir)
+         ; May still not actually be a valid repo:
+         [#f #f]
+         ; But if roots fetching worked, then we'll assume it is, and
+         ; assert other git ops will work:
+         [roots
+           (define description          (git-dir->description dir))
+           (define bare?       (Ok-data (git-dir->bare? dir)))
+           (define heads       (Ok-data (git-dir->heads dir)))
+           (define remotes              (git-dir->remotes dir))
+           (Local hostname dir bare? description (list->set roots) heads remotes)
+           ]))
+    (filter
+      (λ (dir)
+         (let ([dir (path->string dir)])
+           (and (not (ormap (λ (p) (string-prefix? dir (path->string p)))
+                            (set->list (Ignore-prefix ignore))))
+                (not (ormap (λ (px) (regexp-match? px dir))
+                            (set->list (Ignore-regexp ignore)))))))
+      (find-git-dirs search-paths))))
 
-(define/contract (multi-homed? repo)
-  (-> Repo? boolean?)
-  (match (Repo-locals repo)
-    [(list* _ _ _) #t]
-    [(list* _) #f]))
+(define/contract (multi-rooted? loc)
+  out-filter?
+  (> (set-count (Local-roots loc)) 1))
 
-(define/contract (multi-rooted? repo)
-  (-> Repo? boolean?)
-  (> (set-count (Repo-roots repo)) 1))
-
-(define/contract (remoteless? repo)
-  (-> Repo? boolean?)
-  (match (append* (map Local-remotes (Repo-locals repo)))
+(define/contract (remoteless? loc)
+  out-filter?
+  (match (Local-remotes loc)
     ['() #t]
     [(list* _) #f]))
 
@@ -329,10 +285,9 @@
          (Ignore (set) (set))
          (file->lines path)))
 
-(define/contract (output-graph repos)
-  (-> (listof Repo?) void?)
+(define/contract (output-graph locals)
+  (-> (listof Local?) void?)
   (define all-roots (mutable-set))
-  (define all-locals (mutable-set))
   (define all-remotes (mutable-set))
 
   (define (edge-label-root2local _r _l) "\"\"")
@@ -361,35 +316,35 @@
 
   (displayln "digraph {")
   (for-each
-    (λ (repo)
+    (λ (loc)
+       (printf
+         "~a [label=~a shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8, fontcolor=black];~n"
+         (node-id-local loc)
+         (node-label-local loc))
+       (set-for-each
+         (Local-roots loc)
+         (λ (root)
+            (printf
+              "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
+              (node-id-root root)
+              (node-id-local loc)
+              (edge-label-root2local root loc))
+            (set-add! all-roots root)))
        (for-each
-         (λ (loc)
-            (set-for-each
-              (Repo-roots repo)
-              (λ (root)
-                 (printf
-                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=yellowgreen];~n"
-                   (node-id-root root)
-                   (node-id-local loc)
-                   (edge-label-root2local root loc))
-                 (set-add! all-roots root)))
-            (set-add! all-locals loc)
-            (for-each
-              (λ (rem)
-                 (set-add! all-remotes rem)
-                 (define edge-color
-                   (if (Remote-reachable? rem)
-                       "lightblue"
-                       "tomato"))
-                 (printf
-                   "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=~a fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
-                   (node-id-local loc)
-                   (node-id-remote rem)
-                   (edge-label-local2remote loc rem)
-                   edge-color))
-              (Local-remotes loc)))
-         (Repo-locals repo)))
-    repos)
+         (λ (rem)
+            (set-add! all-remotes rem)
+            (define edge-color
+              (if (Remote-reachable? rem)
+                  "lightblue"
+                  "tomato"))
+            (printf
+              "~a -> ~a [label=~a, fontname=monospace, fontsize=8, color=~a fontcolor=lightblue3, dir=both, arrowtail=dot];~n"
+              (node-id-local loc)
+              (node-id-remote rem)
+              (edge-label-local2remote loc rem)
+              edge-color))
+         (Local-remotes loc)))
+    locals)
 
   (invariant-assertion (set/c string? #:kind 'mutable) all-roots)
   (set-for-each
@@ -399,15 +354,6 @@
          "~a [label=~a, shape=rectangle, style=filled, fillcolor=yellowgreen, fontname=monospace, fontsize=8];~n"
          (node-id-root r)
          (node-label-root r))))
-
-  (invariant-assertion (set/c Local? #:kind 'mutable) all-locals)
-  (set-for-each
-    all-locals
-    (λ (l)
-       (printf
-         "~a [label=~a shape=folder, style=filled, fillcolor=wheat, fontname=monospace, fontsize=8, fontcolor=black];~n"
-         (node-id-local l)
-         (node-label-local l))))
 
   (invariant-assertion (set/c Remote? #:kind 'mutable) all-remotes)
   (set-for-each
@@ -421,65 +367,11 @@
 
   (displayln "}"))
 
-(define/contract (output-html repos)
-  (-> (listof Repo?) void?)
-  (define (remotes-table remotes)
-    (if (empty? remotes)
-        '()
-        (list* 'table '([bgcolor "lightblue"]
-                        [border      "0"]
-                        [cellborder  "0"]
-                        [cellspacing "5"]
-                        [cellpadding "5"])
-               '(tr
-                 (th "name")
-                 (th "addr"))
-               (map (λ (rem)
-                       `(tr
-                         (td ,(Remote-name rem))
-                         (td ,(Remote-addr rem))))
-                    remotes))))
-  (define (local->row loc)
-    `(tr
-      (td ,(Local-hostname loc))
-      (td ,(path->string (Local-path loc)))
-      (td ,(remotes-table (Local-remotes loc)))))
-  (define (locals-table locals)
-    (list* 'table '([border      "0"]
-                    [cellborder  "0"]
-                    [cellspacing "5"]
-                    [cellpadding "5"])
-           '(tr
-             (th "host")
-             (th "path")
-             (th "remotes"))
-           (map local->row locals)))
-  (define (roots-list roots)
-    (list* 'ul (map (λ (r) `(li ,r)) roots)))
-  (define (repo->row r)
-    `(tr
-      (td ([bgcolor "yellowgreen"]) ,(roots-list (set->list (Repo-roots r))))
-      (td ([bgcolor "wheat"]) ,(locals-table (Repo-locals r)))))
-  (define repos-table
-    (list* 'table '([border      "0"]
-                    [cellborder  "0"]
-                    [cellspacing "5"]
-                    [cellpadding "0"])
-           '(tr
-             (th ([align "left"]) "roots")
-             (th ([align "left"]) "locals"))
-           (map repo->row repos)))
-  (displayln (xexpr->string `(html
-                              (head)
-                              (body
-                                ([style "font-family:mono"])
-                                ,repos-table)))))
-
 (define sha256
   (compose bytes->hex-string sha256-bytes string->bytes/utf-8))
 
 (define (roots-hash roots)
-  (sha256 (string-join (sort roots string<?) ",")))
+  (sha256 (string-join (sort (set->list roots) string<?) ",")))
 
 (define/contract (link target alias)
   (-> path? path? void?)
@@ -501,8 +393,8 @@
     [(absolute-path? path) (apply build-path (cons root (cdr (explode-path path))))]
     [else (assert-unreachable)]))
 
-(define/contract (output-dir-tree repos)
-  (-> (listof Repo?) void?)
+(define/contract (output-dir-tree locals)
+  (-> (listof Local?) void?)
   ; TODO Refactor this big mess of a procedure
   ; TODO data/$host.rktd
   ; TODO reports/...
@@ -535,8 +427,8 @@
                      (build-path "by-host" (url-host u))))
       (cons (Remote-name rem) path)))
 
-  (define/contract (write-by-host roots loc)
-    (-> (listof string?) Local? void?)
+  (define/contract (write-by-host loc)
+    (-> Local? void?)
     (define dir-index-by-host (local->by-host-dir-path loc))
 
     (when (Local-description loc)
@@ -565,18 +457,18 @@
                                       (Remote-name r2))))))
 
     (let ([dir (build-path dir-index-by-host "roots")])
-      (for-each
+      (set-for-each
+        (Local-roots loc)
         (λ (root)
            (link
              (build-path "by-root" root)
-             (build-path dir root)))
-        roots)))
+             (build-path dir root))))))
 
-  (define/contract (write-by-roots roots loc)
-    (-> (listof string?) Local? void?)
+  (define/contract (write-by-roots loc)
+    (-> Local? void?)
     (define dir-index-by-roots
       ; Concatenated-roots string is sometimes too-long for a valid filename.
-      (build-path "by-roots" (roots-hash roots)))
+      (build-path "by-roots" (roots-hash (Local-roots loc))))
     (define loc-path (local->work-tree-path loc))
     (invariant-assertion absolute-path? loc-path)
     (define link-name
@@ -586,9 +478,10 @@
     (link (local->by-host-dir-path loc)
           (build-path dir-index-by-roots link-name)))
 
-  (define/contract (write-by-root roots loc)
-    (-> (listof string?) Local? void?)
-    (for-each
+  (define/contract (write-by-root loc)
+    (-> Local? void?)
+    (set-for-each
+      (Local-roots loc)
       (λ (root)
          (define dir-index-by-root (build-path "by-root" root))
          (define loc-path (local->work-tree-path loc))
@@ -598,15 +491,14 @@
                               (map path->string (cdr (explode-path loc-path))))
                         "---"))
          (link (local->by-host-dir-path loc)
-               (build-path dir-index-by-root link-name)))
-      roots))
+               (build-path dir-index-by-root link-name)))))
 
   (define/contract (local->name loc)
     (-> Local? string?)
     (path->string (last (explode-path (local->work-tree-path loc)))))
 
-  (define/contract (write-by-name roots loc)
-    (-> (listof string?) Local? void?)
+  (define/contract (write-by-name loc)
+    (-> Local? void?)
     (define link-name
       (let ([loc-path (local->work-tree-path loc)])
         (invariant-assertion absolute-path? loc-path)
@@ -617,19 +509,15 @@
           (build-path "by-name" (local->name loc) link-name)))
 
   (for-each
-    (λ (rep)
-       (for-each
-         (λ (loc)
-            (define roots (set->list (Repo-roots rep)))
-            (write-by-host roots loc)
-            (write-by-name roots loc)
-            (write-by-root roots loc)
-            (write-by-roots roots loc))
-         (Repo-locals rep)))
-    repos))
+    (λ (loc)
+       (write-by-host loc)
+       (write-by-name loc)
+       (write-by-root loc)
+       (write-by-roots loc))
+    locals))
 
 (define/contract (input data-source input-paths)
-  (-> data-source? (listof path?) (listof Repo?))
+  (-> data-source? (listof path?) (listof Local?))
   (match data-source
     [(Search ignore)
      (find-git-repos (gethostname) input-paths ignore)]
@@ -640,41 +528,37 @@
                           (with-input-from-file p (λ () (deserialize (read)))))
                        input-paths)))]))
 
-(define/contract (output out-format repos)
-  (-> out-format? (listof Repo?) void?)
+(define/contract (output out-format locals)
+  (-> out-format? (listof Local?) void?)
   (match out-format
     [(DirTree rooted-in)
      (parameterize ([current-directory rooted-in])
-       (output-dir-tree repos))]
-    ['serial (write (serialize repos))]
-    ['report-html (output-html repos)]
-    ['report-graph (output-graph repos)]))
+       (output-dir-tree locals))]
+    ['serial (write (serialize locals))]
+    ['report-graph (output-graph locals)]))
 
 (define (main data-source input-paths out-filters out-format out-dst)
   (define t0 (current-inexact-milliseconds))
   ; TODO Time filters separately from reading input.
-  (define repos
-    (let ([repos (input data-source input-paths)])
+  (define locals
+    (let ([locals (input data-source input-paths)])
       (match (set->list out-filters)
-        ['() repos]
+        ['() locals]
         [(and (list* _ _) filters)
-         (filter (λ (r) (andmap (λ (f) (f r)) filters)) repos)])))
+         (filter (λ (r) (andmap (λ (f) (f r)) filters)) locals)])))
   (define t1 (current-inexact-milliseconds))
-  (match out-dst
-    ['stdout (output out-format repos)]
-    [(cons 'file file-path)
-     (with-output-to-file file-path
-                          (λ () (output out-format repos))
-                          #:exists 'replace)])
-  (eprintf "~a ~a repos, ~a roots, ~a locals and ~a remotes in ~a seconds.~n"
+  (let ([output (λ () (output out-format locals))])
+    (match out-dst
+      ['stdout (output)]
+      [(cons 'file file-path)
+       (with-output-to-file file-path (λ () (output)) #:exists 'replace)]))
+  (eprintf "~a ~a local repos, ~a roots and ~a remotes in ~a seconds.~n"
            (match data-source
              [(Search _) "Found"]
              [(or 'read) "Read"])
-           (length repos)
-           (length (append* (map (compose set->list Repo-roots) repos)))
-           (length (uniq (append* (map Repo-locals repos))))
-           (length (uniq (flatten (map (λ (locals) (map Local-remotes locals))
-                                       (map Repo-locals repos)))))
+           (length locals)
+           (length (append* (map (compose set->list Local-roots) locals)))
+           (length (uniq (append* (map Local-remotes locals))))
            (real->decimal-string (/ (- t1 t0) 1000) 3)))
 
 (module+ main
@@ -721,9 +605,12 @@
       #:once-each
       ; TODO orphans (no remotes)
       ; TODO What else?
-      [("--multi-homed")
-       "Output filter: only repos with multiple local directories (local forks)."
-       (set-add! out-filters multi-homed?)]
+      ; TODO Re-implement multi-homed?.
+      ;      Will now need (listof Local?) as input, rather than just Local?
+      ; [("--multi-homed")
+      ; "Output filter: only repos with multiple local directories (local forks)."
+      ; (set-add! out-filters multi-homed?)]
+
       [("--multi-rooted")
        "Output filter: only repos with multiple roots."
        (set-add! out-filters multi-rooted?)]
@@ -744,9 +631,10 @@
       [("-g" "--report-graph")
        "Output a report in DOT language (for Graphviz). Lossy."
        (set! out-format 'report-graph)]
-      [("--report-html")
-       "Output a report in HTML."
-       (set! out-format 'report-html)]
+      ; TODO Re-implement HTML report?
+      ;[("--report-html")
+      ; "Output a report in HTML."
+      ; (set! out-format 'report-html)]
 
       ; Output destination:
       #:once-each
@@ -760,7 +648,7 @@
       (invariant-assertion (listof path-string?) input-paths)
       (invariant-assertion out-format?  out-format)
       (invariant-assertion data-source? data-source)
-      (invariant-assertion (set/c (-> Repo? boolean?) #:kind 'mutable) out-filters)
+      (invariant-assertion (set/c out-filter? #:kind 'mutable) out-filters)
       ; TODO Make sure all other option containers are asserted!
       (match data-source
         [(Search _)
