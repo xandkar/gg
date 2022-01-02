@@ -3,17 +3,18 @@ IGNORE_FILE := .gg-ignore-$(HOST)
 IGNORE_FILE_EXAMPLE := .gg-ignore-HOSTNAME
 SEARCH_TARGETS_FILE := .gg-targets-$(HOST)
 SEARCH_TARGETS_FILE_EXAMPLE := .gg-targets-HOSTNAME
+GG := ../gg
 
 .PHONY: update
 update: $(SEARCH_TARGETS_FILE) $(IGNORE_FILE)
 	mkdir -p data
-	gg --search --output-file data/"$(HOST)".rktd $(shell xargs < $(SEARCH_TARGETS_FILE))
+	$(GG) --search --output-file data/"$(HOST)".rktd $(shell xargs < $(SEARCH_TARGETS_FILE))
 	mkdir -p reports
-	gg --read --report-graph --output-file reports/host."$(HOST)".dot data/"$(HOST)".rktd
-	gg --read --report-graph --output-file reports/all.dot data/*.rktd
+	$(GG) --read --report-graph --output-file reports/host."$(HOST)".dot data/"$(HOST)".rktd
+	$(GG) --read --report-graph --output-file reports/all.dot data/*.rktd
 	rm -rf indices	# XXX So that git can detect file renames/deletions for us automatically.
 	mkdir -p indices
-	gg --read --dir-tree indices data/*.rktd
+	$(GG) --read --dir-tree indices data/*.rktd
 
 .PHONY: commit
 commit:
