@@ -1,10 +1,20 @@
 TODO
 ====
 
-- [ ] figure out an index layout/scheme
-    - host
-    - root
-    - roots
+- [ ] reports
+    - [ ] show relationships of heads somehow
+    - [ ] unreachable remotes: from host/path to URI
+    - [ ] lacking remotes
+    - [ ] lacking locals (only on Internet, like GitHub)
+    - [ ] lacking replicas (on only a single machine)
+    - [ ] different repo names for same root set
+- [-] indices
+    - [x] by host (either local or remote)
+    - [ ] by local host
+    - [ ] by remote host
+    - [ ] by head
+    - [ ] by heads
+- [ ] refactor the index-writing procedures
 
 design
 ------
