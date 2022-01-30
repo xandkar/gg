@@ -1,8 +1,9 @@
 EXE := gg
+SRC := main.rkt
 PREFIX := $(HOME)
 
-$(EXE): $(EXE).rkt
-	raco exe --orig-exe -o $@ $(EXE).rkt
+$(EXE): $(SRC)
+	raco exe --orig-exe -o $@ $(SRC)
 
 .PHONY: build
 build: $(EXE)
@@ -23,6 +24,10 @@ test:
 .PHONY: smoke
 smoke: $(EXE)
 	./smoke-test
+
+.PHONY: doc
+doc:
+	raco scribble --dest doc/html --dest-name index doc/gg.scrbl
 
 .PHONY: clean
 clean:
