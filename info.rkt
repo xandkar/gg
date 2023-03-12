@@ -6,7 +6,7 @@
 (define pkg-desc
   "A tool to discover, catalogue and compare git repos across N machines.")
 (define version
-  "0.0.0")
+  "0.0")
 (define pkg-authors
   '("Siraaj Khandkar <siraaj@khandkar.net>"))
 (define license
