@@ -16,7 +16,7 @@
 (define build-deps
   '("scribble-lib" "racket-doc" "rackunit-lib"))
 (define scribblings
-  '(("doc/gg.scrbl" ())))
+  '(("doc/gg.scrbl" () ("Git"))))
 (define racket-launcher-names
   '("gg"))
 (define racket-launcher-libraries
